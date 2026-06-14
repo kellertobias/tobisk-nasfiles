@@ -61,6 +61,8 @@ For complete setup guides, see:
 - [TrueNAS setup example](docs/truenas.md)
 - [Configuration reference](docs/configuration.md)
 
+we sadly do not yet offer prebuilt docker images, this will follow in a future update.
+
 ## Features
 
 ### File Browsing
