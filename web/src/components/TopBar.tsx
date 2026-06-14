@@ -1,0 +1,422 @@
+import api from '../api/client';
+import type { UserInfo } from '../api/client';
+import { useViewStore } from '../state/view';
+import { useState, useRef, useEffect, useMemo } from 'react';
+import { Icon } from './Icon';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate, useRouterState } from '@tanstack/react-router';
+import { formatFileSize } from '../lib/icons';
+import { AppLogo } from './AppLogo';
+
+interface TopBarProps {
+  user: UserInfo | null;
+  currentRoot?: string;
+}
+
+function estimateRemainingMs(jobs: Array<{
+  created_at: number;
+  total_bytes: number;
+  transferred_bytes: number;
+  total_entries: number;
+  completed_entries: number;
+}>) {
+  const now = Date.now();
+  const estimates = jobs
+    .map((job) => {
+      const total = job.total_bytes > 0 ? job.total_bytes : job.total_entries;
+      const done = job.total_bytes > 0 ? job.transferred_bytes : job.completed_entries;
+      const elapsed = Math.max(0, now - job.created_at);
+      if (total <= 0 || done <= 0 || done >= total || elapsed < 1000) return null;
+      return ((total - done) / done) * elapsed;
+    })
+    .filter((value): value is number => value !== null && Number.isFinite(value));
+
+  if (estimates.length === 0) return null;
+  return Math.max(...estimates);
+}
+
+function formatRemainingTime(ms: number | null) {
+  if (ms === null) return 'estimating';
+  const seconds = Math.max(1, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds}s left`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m left`;
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes % 60;
+  return restMinutes > 0 ? `${hours}h ${restMinutes}m left` : `${hours}h left`;
+}
+
+export function TopBar({ user }: TopBarProps) {
+  const { toggleSidebar } = useViewStore();
+  const navigate = useNavigate();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const queryClient = useQueryClient();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const seenFinishedJobs = useRef<Set<string>>(new Set());
+  const buildDate = user?.build.date && user.build.date !== 'unknown'
+    ? new Date(user.build.date).toLocaleString()
+    : 'unknown';
+  const buildCommit = user?.build.commit && user.build.commit !== 'unknown'
+    ? user.build.commit.slice(0, 12)
+    : 'unknown';
+  const hasSidebar = pathname.startsWith('/r/');
+
+  const navigateToFiles = () => {
+    navigate({ to: '/' });
+  };
+
+  const handleMenuClick = () => {
+    if (hasSidebar) {
+      toggleSidebar();
+      return;
+    }
+    navigateToFiles();
+  };
+
+  const { data: transferJobData } = useQuery({
+    queryKey: ['transfer-jobs'],
+    queryFn: api.transferJobs,
+    enabled: Boolean(user),
+    refetchInterval: user ? 1000 : false,
+    staleTime: 1000,
+  });
+
+  const transferJobs = useMemo(() => transferJobData?.jobs ?? [], [transferJobData?.jobs]);
+  const activeTransferJobs = transferJobs.filter((job) => job.status === 'queued' || job.status === 'running');
+  const activeTransferCount = activeTransferJobs.length;
+  const activeOperation = activeTransferJobs.some((job) => job.operation === 'copy') ? 'Copying' : 'Moving';
+  const totalBytes = activeTransferJobs.reduce((sum, job) => sum + job.total_bytes, 0);
+  const transferredBytes = activeTransferJobs.reduce((sum, job) => sum + job.transferred_bytes, 0);
+  const totalEntries = activeTransferJobs.reduce((sum, job) => sum + job.total_entries, 0);
+  const completedEntries = activeTransferJobs.reduce((sum, job) => sum + job.completed_entries, 0);
+  const progressPct = totalBytes > 0
+    ? Math.min(100, Math.round((transferredBytes / totalBytes) * 100))
+    : totalEntries > 0
+      ? Math.min(100, Math.round((completedEntries / totalEntries) * 100))
+      : 0;
+  const progressLabel = totalBytes > 0
+    ? `${formatFileSize(transferredBytes)} / ${formatFileSize(totalBytes)}`
+    : totalEntries > 0
+      ? `${completedEntries} / ${totalEntries} items`
+      : 'Preparing';
+  const remainingLabel = formatRemainingTime(estimateRemainingMs(activeTransferJobs));
+
+  // Close menu on click outside
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  useEffect(() => {
+    for (const job of transferJobs) {
+      if ((job.status === 'done' || job.status === 'error') && !seenFinishedJobs.current.has(job.id)) {
+        seenFinishedJobs.current.add(job.id);
+        queryClient.invalidateQueries({ queryKey: ['listing'] });
+        queryClient.invalidateQueries({ queryKey: ['tree'] });
+        queryClient.invalidateQueries({ queryKey: ['roots'] });
+      }
+    }
+  }, [queryClient, transferJobs]);
+
+  return (
+    <header style={{
+      display: 'flex',
+      alignItems: 'center',
+      height: 52,
+      padding: '0 var(--space-4)',
+      borderBottom: '1px solid var(--color-border)',
+      background: 'var(--color-bg)',
+      gap: 'var(--space-3)',
+      flexShrink: 0,
+    }}>
+      {/* Sidebar toggle */}
+      <button
+        onClick={handleMenuClick}
+        title={hasSidebar ? 'Toggle sidebar' : 'Back to files'}
+        aria-label={hasSidebar ? 'Toggle sidebar' : 'Back to files'}
+        style={{
+          background: 'none',
+          border: 'none',
+          cursor: 'pointer',
+          padding: 'var(--space-1)',
+          borderRadius: 'var(--radius-sm)',
+          color: 'var(--color-fg-muted)',
+          display: 'flex',
+          alignItems: 'center',
+          transition: `color var(--duration-fast) var(--ease-out)`,
+        }}
+        onMouseOver={(e) => e.currentTarget.style.color = 'var(--color-fg)'}
+        onMouseOut={(e) => e.currentTarget.style.color = 'var(--color-fg-muted)'}
+      >
+        <Icon name="menu" size={20} />
+      </button>
+
+      {/* Logo */}
+      <button
+        type="button"
+        onClick={hasSidebar ? undefined : navigateToFiles}
+        title={hasSidebar ? undefined : 'Back to files'}
+        aria-label="nasfiles"
+        style={{
+          background: 'none',
+          border: 'none',
+          padding: 0,
+          color: 'var(--color-fg)',
+          cursor: hasSidebar ? 'default' : 'pointer',
+          display: 'inline-flex',
+          alignItems: 'center',
+        }}
+      >
+        <AppLogo size={26} wordmarkSize={16} compact />
+      </button>
+
+      <div style={{ flex: 1 }} />
+
+      {activeTransferCount > 0 && (
+        <div
+          title="You can close this browser while the server finishes moving or copying. Progress will still be shown if you come back before it finishes."
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 'var(--space-2)',
+            minWidth: 220,
+            maxWidth: 300,
+            padding: 'var(--space-1) var(--space-2)',
+            border: '1px solid var(--color-border)',
+            borderRadius: 'var(--radius-md)',
+            background: 'var(--color-bg-muted)',
+            color: 'var(--color-fg)',
+          }}
+        >
+          <Icon name="upload" size={15} color="var(--color-accent)" />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 'var(--space-2)',
+              marginBottom: 3,
+            }}>
+              <span style={{
+                fontSize: 'var(--text-xs)',
+                fontWeight: 600,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}>
+                {activeOperation} {activeTransferCount > 1 ? `${activeTransferCount} jobs` : `${activeTransferJobs[0]?.paths.length ?? 0} item(s)`}
+              </span>
+              <span className="tabular-nums" style={{ fontSize: 'var(--text-xs)', color: 'var(--color-fg-muted)' }}>
+                {progressPct}%
+              </span>
+            </div>
+            <div style={{
+              height: 3,
+              borderRadius: 2,
+              background: 'var(--color-border)',
+              overflow: 'hidden',
+              marginBottom: 3,
+            }}>
+              <div style={{
+                height: '100%',
+                width: `${progressPct}%`,
+                borderRadius: 2,
+                background: 'var(--color-accent)',
+                transition: 'width 200ms ease-out',
+              }} />
+            </div>
+            <div style={{
+              fontSize: 'var(--text-xs)',
+              color: 'var(--color-fg-subtle)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}>
+              {progressLabel} · {remainingLabel}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* User menu */}
+      {user && (
+        <div ref={menuRef} style={{ position: 'relative' }}>
+          <button
+            onClick={() => setMenuOpen(!menuOpen)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 'var(--space-2)',
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              padding: 'var(--space-1) var(--space-2)',
+              borderRadius: 'var(--radius-md)',
+              transition: `background var(--duration-fast) var(--ease-out)`,
+              color: 'var(--color-fg)',
+            }}
+            onMouseOver={(e) => e.currentTarget.style.background = 'var(--color-bg-muted)'}
+            onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
+          >
+            {user.picture_url ? (
+              <img
+                src={user.picture_url}
+                alt=""
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 'var(--radius-full)',
+                  objectFit: 'cover',
+                }}
+              />
+            ) : (
+              <div style={{
+                width: 28,
+                height: 28,
+                borderRadius: 'var(--radius-full)',
+                background: 'var(--color-accent)',
+                color: 'var(--color-accent-fg)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 'var(--text-sm)',
+                fontWeight: 600,
+              }}>
+                {user.display_name.charAt(0).toUpperCase()}
+              </div>
+            )}
+            <span style={{ fontSize: 'var(--text-sm)', fontWeight: 500 }}>
+              {user.display_name}
+            </span>
+            <Icon name="chevronDown" size={14} color="var(--color-fg-subtle)" />
+          </button>
+
+          {/* Dropdown menu */}
+          {menuOpen && (
+            <div style={{
+              position: 'absolute',
+              top: '100%',
+              right: 0,
+              marginTop: 'var(--space-1)',
+              background: 'var(--color-bg)',
+              border: '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-lg)',
+              boxShadow: 'var(--shadow-lg)',
+              minWidth: 200,
+              padding: 'var(--space-1)',
+              zIndex: 50,
+            }} className="fade-in">
+              <div style={{
+                padding: 'var(--space-2) var(--space-3)',
+                borderBottom: '1px solid var(--color-border-muted)',
+                marginBottom: 'var(--space-1)',
+              }}>
+                <div style={{ fontWeight: 500, fontSize: 'var(--text-sm)', color: 'var(--color-fg)' }}>
+                  {user.display_name}
+                </div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-fg-subtle)' }}>
+                  {user.username}
+                </div>
+              </div>
+
+              {user.is_admin && (
+                <a
+                  href="/admin"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-2)',
+                    width: '100%',
+                    padding: 'var(--space-2) var(--space-3)',
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    borderRadius: 'var(--radius-md)',
+                    fontSize: 'var(--text-sm)',
+                    color: 'var(--color-fg)',
+                    textDecoration: 'none',
+                    transition: `background var(--duration-fast) var(--ease-out)`,
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.background = 'var(--color-bg-muted)'}
+                  onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
+                >
+                  <Icon name="settings" size={16} />
+                  Administration
+                </a>
+              )}
+
+              <a
+                href="/profile"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 'var(--space-2)',
+                  width: '100%',
+                  padding: 'var(--space-2) var(--space-3)',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  borderRadius: 'var(--radius-md)',
+                  fontSize: 'var(--text-sm)',
+                  color: 'var(--color-fg)',
+                  textDecoration: 'none',
+                  transition: `background var(--duration-fast) var(--ease-out)`,
+                }}
+                onMouseOver={(e) => e.currentTarget.style.background = 'var(--color-bg-muted)'}
+                onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
+              >
+                <Icon name="user" size={16} />
+                Profile
+              </a>
+
+              <button
+                onClick={() => {
+                  api.logout().catch(() => {});
+                  window.location.href = '/';
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 'var(--space-2)',
+                  width: '100%',
+                  padding: 'var(--space-2) var(--space-3)',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  borderRadius: 'var(--radius-md)',
+                  fontSize: 'var(--text-sm)',
+                  color: 'var(--color-danger)',
+                  transition: `background var(--duration-fast) var(--ease-out)`,
+                  textAlign: 'left',
+                }}
+                onMouseOver={(e) => e.currentTarget.style.background = 'var(--color-danger-muted)'}
+                onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
+              >
+                <Icon name="logout" size={16} />
+                Sign out
+              </button>
+
+              <div style={{
+                padding: 'var(--space-2) var(--space-3)',
+                borderTop: '1px solid var(--color-border-muted)',
+                marginTop: 'var(--space-1)',
+                color: 'var(--color-fg-subtle)',
+                fontSize: 'var(--text-xs)',
+                lineHeight: 1.5,
+              }}>
+                <div>Build {buildDate}</div>
+                <div style={{ fontFamily: 'monospace' }}>{buildCommit}</div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </header>
+  );
+}

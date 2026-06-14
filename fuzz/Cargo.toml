@@ -1,0 +1,18 @@
+[package]
+name = "nasfiles-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+nasfiles-core = { path = "../../crates/nasfiles-core" }
+tempfile = "3"
+
+[[bin]]
+name = "fuzz_safe_path"
+path = "fuzz_targets/safe_path.rs"
+doc = false

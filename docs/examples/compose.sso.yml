@@ -1,0 +1,55 @@
+services:
+  nasfiles:
+    build: .
+    # image: ghcr.io/your-org/nasfiles:latest
+    restart: unless-stopped
+    ports:
+      - "2222:2222"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.nasfiles.rule=Host(`${NASFILES_HOST}`)"
+      - "traefik.http.routers.nasfiles.entrypoints=websecure"
+      - "traefik.http.routers.nasfiles.tls=true"
+      - "traefik.http.routers.nasfiles.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-letsencrypt}"
+      - "traefik.http.services.nasfiles.loadbalancer.server.port=8080"
+    environment:
+      BIND_ADDR: "0.0.0.0:8080"
+      BASE_URL: "https://${NASFILES_HOST}"
+      AUTH_MODE: "sso"
+      SESSION_SECRET: "${SESSION_SECRET}"
+      DATA_DIR: "/data"
+      DB_URL: "sqlite:///data/nasfiles.db?mode=rwc"
+
+      COMMON_FOLDERS: '{"Media":"/mnt/media","Documents":"/mnt/documents","Projects":"/mnt/projects"}'
+
+      SSO_OIDC_ISSUER_URL: "https://idp.example.com/application/o/nasfiles/"
+      SSO_OIDC_CLIENT_ID: "${SSO_OIDC_CLIENT_ID}"
+      SSO_OIDC_CLIENT_SECRET: "${SSO_OIDC_CLIENT_SECRET}"
+      SSO_USERNAME_CLAIM: "preferred_username"
+      SSO_DISPLAY_NAME_CLAIM: "name"
+      SSO_PICTURE_CLAIM: "picture"
+      SSO_GROUPS_CLAIM: "groups"
+
+      # Everyone can read Media. Editors can write/share Documents and Projects.
+      SSO_DEFAULT_FOLDERS_READ: "Media"
+      SSO_GROUP_EDITORS_COMMON_FOLDERS: "Documents,Projects"
+      SSO_ADMIN_GROUPS: "admins"
+
+      SFTP_ENABLED: "true"
+      SFTP_BIND_ADDR: "0.0.0.0:2222"
+      RUST_LOG: "info"
+    volumes:
+      - nasfiles-data:/data
+      - /srv/media:/mnt/media:ro
+      - /srv/documents:/mnt/documents
+      - /srv/projects:/mnt/projects
+    networks:
+      - proxy
+
+volumes:
+  nasfiles-data:
+
+networks:
+  proxy:
+    external: true

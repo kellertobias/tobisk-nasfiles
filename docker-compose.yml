@@ -1,0 +1,26 @@
+# nasfiles development / demo stack
+#
+# Usage:
+#   docker compose up --build
+#   Open http://localhost:8080
+
+services:
+  nasfiles:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      NASFILES_DEV: "1"
+      BIND_ADDR: "0.0.0.0:8080"
+      BASE_URL: "http://localhost:8080"
+      DB_URL: "sqlite:///data/nasfiles.db?mode=rwc"
+      COMMON_FOLDERS: '{"Files":"/files"}'
+      SSO_DEFAULT_COMMON_FOLDERS: "Files"
+      SSO_ADMIN_GROUPS: "STAFF"
+      RUST_LOG: "info"
+    volumes:
+      - nasfiles-data:/data
+      - ./test-data:/files:ro
+
+volumes:
+  nasfiles-data:

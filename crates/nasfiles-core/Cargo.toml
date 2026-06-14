@@ -1,0 +1,21 @@
+[package]
+name = "nasfiles-core"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+sha2 = { workspace = true }
+base64ct = { workspace = true }
+rand = { workspace = true }
+hmac = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+hex = "0.4"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,33 @@
+# Build artifacts
+target/
+web/node_modules/
+web/dist/
+
+# Data / runtime
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Version control
+.git/
+.gitignore
+
+# Documentation (not needed in image)
+*.md
+!README.md
+INITIAL_PRD.md
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# CI / config
+.github/
+deny.toml
+fuzz/
+
+# Test data
+test-data/

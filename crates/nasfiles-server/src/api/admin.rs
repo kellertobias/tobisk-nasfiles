@@ -1,0 +1,294 @@
+use axum::{
+    Json,
+    extract::{Query, State},
+    response::IntoResponse,
+};
+use serde::Deserialize;
+
+use crate::auth::middleware::CurrentUser;
+use crate::state::AppState;
+
+/// Middleware check: require admin.
+#[allow(clippy::result_large_err)]
+fn require_admin(user: &nasfiles_core::models::AuthUser) -> Result<(), axum::response::Response> {
+    if !user.is_admin {
+        return Err((
+            axum::http::StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "admin access required"})),
+        )
+            .into_response());
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct PaginationQuery {
+    #[serde(default = "default_limit")]
+    pub limit: i64,
+    #[serde(default)]
+    pub offset: i64,
+    /// Filter by status: "active", "expired", "revoked", or "all"
+    #[serde(default = "default_all")]
+    pub status: String,
+}
+
+fn default_limit() -> i64 {
+    50
+}
+fn default_all() -> String {
+    "all".to_string()
+}
+
+/// GET /api/admin/shares — list all shares across all users (admin only).
+pub async fn list_all_shares(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Query(query): Query<PaginationQuery>,
+) -> Result<impl IntoResponse, axum::response::Response> {
+    require_admin(&user)?;
+
+    let limit = query.limit.clamp(1, 200);
+    let offset = query.offset.max(0);
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    let rows = sqlx::query_as::<_, ShareRow>(
+        r#"
+        SELECT s.id, s.owner_user_id, u.display_name AS owner_name,
+               s.root_key, s.relative_path,
+               CASE WHEN s.is_directory THEN 1 ELSE 0 END AS is_directory,
+               s.target_kind,
+               CASE WHEN s.password_hash IS NOT NULL THEN 1 ELSE 0 END AS has_password,
+               CASE WHEN s.allow_upload THEN 1 ELSE 0 END AS allow_upload,
+               CASE WHEN s.allow_download THEN 1 ELSE 0 END AS allow_download,
+               s.expires_at, s.created_at, s.revoked_at,
+               (SELECT COUNT(*) FROM share_access_log sal WHERE sal.share_id = s.id) as access_count,
+               (SELECT MAX(occurred_at) FROM share_access_log sal WHERE sal.share_id = s.id) as last_accessed_at
+        FROM shares s
+        JOIN users u ON u.id = s.owner_user_id
+        ORDER BY s.created_at DESC
+        LIMIT $1 OFFSET $2
+        "#,
+    )
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("admin shares query: {e}");
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "database error"})),
+        )
+            .into_response()
+    })?;
+
+    // Filter in app layer (simpler than dynamic SQL with sqlx::Any)
+    let filtered: Vec<_> = rows
+        .into_iter()
+        .filter(|s| match query.status.as_str() {
+            "active" => s.revoked_at.is_none() && s.expires_at.map(|e| e > now_ms).unwrap_or(true),
+            "expired" => s.expires_at.map(|e| e <= now_ms).unwrap_or(false),
+            "revoked" => s.revoked_at.is_some(),
+            _ => true, // "all"
+        })
+        .collect();
+
+    let total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM shares")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap_or(0);
+
+    let shares: Vec<serde_json::Value> = filtered
+        .into_iter()
+        .map(|s| {
+            serde_json::json!({
+                "id": s.id,
+                "owner_user_id": s.owner_user_id,
+                "owner_name": s.owner_name,
+                "root_key": s.root_key,
+                "relative_path": s.relative_path,
+                "is_directory": s.is_directory != 0,
+                "target_kind": s.target_kind,
+                "has_password": s.has_password != 0,
+                "allow_upload": s.allow_upload != 0,
+                "allow_download": s.allow_download != 0,
+                "expires_at": s.expires_at,
+                "created_at": s.created_at,
+                "revoked_at": s.revoked_at,
+                "access_count": s.access_count,
+                "last_accessed_at": s.last_accessed_at,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "shares": shares,
+        "total": total,
+        "page": (offset / limit) + 1,
+        "pages": (total as f64 / limit as f64).ceil() as i64,
+    })))
+}
+
+/// GET /api/admin/access-log — global access log (admin only).
+pub async fn list_access_log(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Query(query): Query<AccessLogQuery>,
+) -> Result<impl IntoResponse, axum::response::Response> {
+    require_admin(&user)?;
+
+    let limit = query.limit.clamp(1, 200);
+    let offset = query.offset.max(0);
+
+    let rows = sqlx::query_as::<_, AccessLogRow>(
+        r#"
+        SELECT l.id, l.share_id, l.occurred_at, l.ip, l.user_agent, l.action, l.path
+        FROM share_access_log l
+        ORDER BY l.occurred_at DESC
+        LIMIT $1 OFFSET $2
+        "#,
+    )
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("admin access log query: {e}");
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "database error"})),
+        )
+            .into_response()
+    })?;
+
+    let total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM share_access_log")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap_or(0);
+
+    Ok(Json(serde_json::json!({
+        "entries": rows,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    })))
+}
+
+/// GET /api/admin/users — list all provisioned users (admin only).
+pub async fn list_users(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+) -> Result<impl IntoResponse, axum::response::Response> {
+    require_admin(&user)?;
+
+    let rows = sqlx::query_as::<_, UserRow>(
+        r#"
+        SELECT id, username, display_name, picture_url,
+               CASE WHEN is_admin THEN 1 ELSE 0 END AS is_admin,
+               CASE WHEN has_home THEN 1 ELSE 0 END AS has_home,
+               auth_provider, folder_permissions_json,
+               created_at, last_login_at,
+               (SELECT COUNT(*) FROM local_passkeys p WHERE p.user_id = users.id AND p.revoked_at IS NULL) AS passkey_count,
+               (SELECT COUNT(*) FROM local_totp t WHERE t.user_id = users.id) AS totp_count,
+               (SELECT COUNT(*) FROM local_totp_trusted_devices d WHERE d.user_id = users.id AND d.revoked_at IS NULL) AS trusted_device_count
+        FROM users
+        ORDER BY last_login_at DESC
+        "#,
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("admin users query: {e}");
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "database error"})),
+        )
+            .into_response()
+    })?;
+
+    let users: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|u| {
+            serde_json::json!({
+                "id": u.id,
+                "username": u.username,
+                "display_name": u.display_name,
+                "picture_url": u.picture_url,
+                "is_admin": u.is_admin != 0,
+                "has_home": u.has_home != 0,
+                "auth_provider": u.auth_provider,
+                "folder_permissions": u.folder_permissions_json
+                    .as_deref()
+                    .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+                    .unwrap_or_else(|| serde_json::json!({})),
+                "passkey_count": u.passkey_count,
+                "totp_enabled": u.totp_count > 0,
+                "trusted_device_count": u.trusted_device_count,
+                "created_at": u.created_at,
+                "last_login_at": u.last_login_at,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "users": users })))
+}
+
+// ---------------------------------------------------------------------------
+// Query / row types
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct AccessLogQuery {
+    #[serde(default = "default_limit")]
+    pub limit: i64,
+    #[serde(default)]
+    pub offset: i64,
+}
+
+#[derive(sqlx::FromRow, serde::Serialize)]
+struct ShareRow {
+    id: String,
+    owner_user_id: String,
+    owner_name: String,
+    root_key: String,
+    relative_path: String,
+    is_directory: i64,
+    target_kind: String,
+    has_password: i64,
+    allow_upload: i64,
+    allow_download: i64,
+    expires_at: Option<i64>,
+    created_at: i64,
+    revoked_at: Option<i64>,
+    access_count: i64,
+    last_accessed_at: Option<i64>,
+}
+
+#[derive(sqlx::FromRow, serde::Serialize)]
+struct AccessLogRow {
+    id: String,
+    share_id: String,
+    occurred_at: i64,
+    ip: Option<String>,
+    user_agent: Option<String>,
+    action: String,
+    path: Option<String>,
+}
+
+#[derive(sqlx::FromRow, serde::Serialize)]
+struct UserRow {
+    id: String,
+    username: String,
+    display_name: String,
+    picture_url: Option<String>,
+    is_admin: i64,
+    has_home: i64,
+    auth_provider: String,
+    folder_permissions_json: Option<String>,
+    created_at: i64,
+    last_login_at: i64,
+    passkey_count: i64,
+    totp_count: i64,
+    trusted_device_count: i64,
+}

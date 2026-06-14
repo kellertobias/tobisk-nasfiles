@@ -1,0 +1,291 @@
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct FolderCaps {
+    pub read: bool,
+    pub write: bool,
+    pub share: bool,
+}
+
+/// Authenticated user extracted from session.
+/// Stored in the session after OIDC/SAML login.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthUser {
+    pub user_id: String,
+    pub external_id: String,
+    pub username: String,
+    pub display_name: String,
+    pub picture_url: Option<String>,
+    pub folder_permissions: HashMap<String, FolderCaps>,
+    pub has_home: bool,
+    pub is_admin: bool,
+}
+
+impl AuthUser {
+    pub fn can_read(&self, key: &str) -> bool {
+        if key == "~" {
+            return self.has_home;
+        }
+        self.folder_permissions
+            .get(key)
+            .map(|c| c.read)
+            .unwrap_or(false)
+    }
+
+    pub fn can_write(&self, key: &str) -> bool {
+        if key == "~" {
+            return self.has_home;
+        }
+        self.folder_permissions
+            .get(key)
+            .map(|c| c.write)
+            .unwrap_or(false)
+    }
+
+    pub fn can_share(&self, key: &str) -> bool {
+        if key == "~" {
+            return self.has_home;
+        }
+        self.folder_permissions
+            .get(key)
+            .map(|c| c.share)
+            .unwrap_or(false)
+    }
+
+    pub fn readable_folders(&self) -> impl Iterator<Item = &String> {
+        self.folder_permissions
+            .iter()
+            .filter(|(_, caps)| caps.read)
+            .map(|(k, _)| k)
+    }
+
+    pub fn effectively_no_access(&self) -> bool {
+        // If there are no readable folders, and no home, and not admin -> no access
+        let has_any_readable = self.folder_permissions.values().any(|c| c.read);
+        !has_any_readable && !self.has_home && !self.is_admin
+    }
+
+    /// Returns a sanitized version of the username safe for filesystem paths.
+    pub fn safe_username(&self) -> String {
+        Self::sanitize_username(&self.username)
+    }
+
+    /// Sanitizes a username string for use in filesystem paths.
+    pub fn sanitize_username(username: &str) -> String {
+        username.replace(['/', '\\'], "_").replace("..", "_")
+    }
+}
+
+/// A root folder visible to the user.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Root {
+    pub key: String,
+    pub display_name: String,
+    pub kind: RootKind,
+    pub caps: FolderCaps,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<RootUsage>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RootUsage {
+    pub used_bytes: u64,
+    pub total_bytes: u64,
+    pub available_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RootKind {
+    Common,
+    Home,
+}
+
+/// A single entry in a directory listing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileEntry {
+    pub name: String,
+    pub size: u64,
+    pub modified_at: i64,
+    pub is_dir: bool,
+    pub mime_type: Option<String>,
+    pub has_thumbnail: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_info: Option<MediaInfo>,
+}
+
+/// Extracted metadata for audio/video files.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MediaInfo {
+    pub duration_ms: Option<u64>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
+    pub bitrate_bps: Option<u64>,
+    pub format_name: Option<String>,
+    pub video_mime_codec: Option<String>,
+    pub audio_mime_codec: Option<String>,
+    #[serde(default)]
+    pub audio_languages: Vec<String>,
+}
+
+/// Share target kind.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShareTargetKind {
+    User,
+    Guest,
+    Public,
+}
+
+/// Share model stored in database.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Share {
+    pub id: String,
+    pub token_hash: String,
+    pub owner_user_id: String,
+    pub root_kind: RootKind,
+    pub root_key: String,
+    pub relative_path: String,
+    pub is_directory: bool,
+    pub target_kind: ShareTargetKind,
+    pub target_user_id: Option<String>,
+    pub password_hash: Option<String>,
+    pub allow_upload: bool,
+    pub allow_download: bool,
+    pub expires_at: Option<i64>,
+    pub created_at: i64,
+    pub revoked_at: Option<i64>,
+}
+
+/// Access log entry for a share.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShareAccessLog {
+    pub id: String,
+    pub share_id: String,
+    pub occurred_at: i64,
+    pub ip: Option<String>,
+    pub user_agent: Option<String>,
+    pub action: ShareAction,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShareAction {
+    Open,
+    Download,
+    Upload,
+    List,
+    AuthFail,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_auth_user_capabilities() {
+        let mut permissions = HashMap::new();
+        permissions.insert(
+            "shared".to_string(),
+            FolderCaps {
+                read: true,
+                write: false,
+                share: false,
+            },
+        );
+        permissions.insert(
+            "docs".to_string(),
+            FolderCaps {
+                read: true,
+                write: true,
+                share: true,
+            },
+        );
+
+        let user = AuthUser {
+            user_id: "1".into(),
+            external_id: "ext1".into(),
+            username: "test".into(),
+            display_name: "Test User".into(),
+            picture_url: None,
+            folder_permissions: permissions,
+            has_home: true,
+            is_admin: false,
+        };
+
+        // Home folder
+        assert!(user.can_read("~"));
+        assert!(user.can_write("~"));
+        assert!(user.can_share("~"));
+
+        // shared folder
+        assert!(user.can_read("shared"));
+        assert!(!user.can_write("shared"));
+        assert!(!user.can_share("shared"));
+
+        // docs folder
+        assert!(user.can_read("docs"));
+        assert!(user.can_write("docs"));
+        assert!(user.can_share("docs"));
+
+        // unknown folder
+        assert!(!user.can_read("unknown"));
+        assert!(!user.can_write("unknown"));
+        assert!(!user.can_share("unknown"));
+
+        let readable: Vec<&String> = user.readable_folders().collect();
+        assert_eq!(readable.len(), 2);
+
+        assert!(!user.effectively_no_access());
+    }
+
+    #[test]
+    fn test_auth_user_no_access() {
+        let mut user = AuthUser {
+            user_id: "1".into(),
+            external_id: "ext1".into(),
+            username: "test".into(),
+            display_name: "Test User".into(),
+            picture_url: None,
+            folder_permissions: HashMap::new(),
+            has_home: false,
+            is_admin: false,
+        };
+
+        assert!(user.effectively_no_access());
+
+        // Admin has access even without folders
+        user.is_admin = true;
+        assert!(!user.effectively_no_access());
+
+        user.is_admin = false;
+        user.has_home = true;
+        assert!(!user.effectively_no_access());
+
+        user.has_home = false;
+        user.folder_permissions.insert(
+            "test".to_string(),
+            FolderCaps {
+                read: true,
+                write: false,
+                share: false,
+            },
+        );
+        assert!(!user.effectively_no_access());
+
+        user.folder_permissions.insert(
+            "test2".to_string(),
+            FolderCaps {
+                read: false,
+                write: false,
+                share: false,
+            },
+        );
+        user.folder_permissions.remove("test");
+        assert!(user.effectively_no_access());
+    }
+}

@@ -1,0 +1,144 @@
+name: CI
+
+on:
+  push:
+    branches: [main, live]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+
+jobs:
+  check:
+    name: Check & Lint
+    runs-on: ubuntu-latest
+    container:
+      image: registry.tokenet.de/shared/build-environments/default:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - run: mkdir -p web/dist && touch web/dist/index.html
+      - run: cargo check --workspace
+      - run: cargo clippy --workspace -- -D warnings
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    container:
+      image: registry.tokenet.de/shared/build-environments/default:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - run: mkdir -p web/dist && touch web/dist/index.html
+      - run: cargo test --workspace
+
+  deny:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    container:
+      image: registry.tokenet.de/shared/build-environments/default:latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo deny check
+
+  frontend:
+    name: Frontend Build
+    runs-on: ubuntu-latest
+    container:
+      image: registry.tokenet.de/shared/build-environments/default:latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cd web && npm ci
+      - run: cd web && npm audit --omit=dev || true
+      - run: cd web && npx tsc --noEmit
+      - run: cd web && npx vite build
+
+  docker:
+    name: Docker Build & Push
+    runs-on: ubuntu-latest
+    needs: [check, test, frontend]
+    steps:
+      - name: Export CI environment
+        run: |
+          echo "IMAGE_PREFIX=$IMAGE_PREFIX" >> "$GITHUB_ENV"
+          echo "REGISTRY_USERNAME=$REGISTRY_USERNAME" >> "$GITHUB_ENV"
+          echo "REGISTRY_PASSWORD=$REGISTRY_PASSWORD" >> "$GITHUB_ENV"
+          echo "REGISTRY_HOST=$REGISTRY_HOST" >> "$GITHUB_ENV"
+          echo "NASFILES_BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+      - name: Write build metadata
+        run: |
+          {
+            echo "NASFILES_BUILD_COMMIT=${GITHUB_SHA}"
+            echo "NASFILES_BUILD_DATE=${NASFILES_BUILD_DATE}"
+          } > build-info.env
+      - name: Build & push image
+        uses: https://git.tokenet.de/shared/build-actions/docker-build@main
+        with:
+          registry: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/live') && env.REGISTRY_HOST || '' }}
+          username: ${{ env.REGISTRY_USERNAME }}
+          password: ${{ env.REGISTRY_PASSWORD }}
+          image: ${{ env.IMAGE_PREFIX }}
+          tag: ${{ github.sha }},latest
+          cache: 'false'
+          build-args: |
+            NASFILES_BUILD_COMMIT=${{ github.sha }}
+            NASFILES_BUILD_DATE=${{ env.NASFILES_BUILD_DATE }}
+
+  update-nas-image:
+    name: Update NAS image
+    runs-on: ubuntu-latest
+    needs: [docker]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/live'
+    steps:
+      - name: Export CI environment
+        run: |
+          echo "IMAGE_PREFIX=$IMAGE_PREFIX" >> "$GITHUB_ENV"
+          echo "REGISTRY_HOST=$REGISTRY_HOST" >> "$GITHUB_ENV"
+          echo "NAS_CONTROL_PULL_IMAGE_URL=$NAS_CONTROL_PULL_IMAGE_URL" >> "$GITHUB_ENV"
+      - name: Update NAS image
+        run: |
+          IMAGE="${REGISTRY_HOST}/${IMAGE_PREFIX}:latest"
+          BODY="$(mktemp)"
+
+          echo "NAS update endpoint: ${NAS_CONTROL_PULL_IMAGE_URL:-<missing>}"
+          echo "NAS update image: $IMAGE"
+          echo "IMAGE_PREFIX=${IMAGE_PREFIX:-<missing>}"
+          echo "REGISTRY_HOST=${REGISTRY_HOST:-<missing>}"
+
+          STATUS="$(
+            curl -sS \
+              -o "$BODY" \
+              -w "%{http_code}" \
+              -X POST "$NAS_CONTROL_PULL_IMAGE_URL" \
+              -H 'Content-Type: application/json' \
+              --data "{\"image\":\"$IMAGE\"}"
+          )"
+
+          echo "NAS update status: $STATUS"
+          echo "NAS update response:"
+          cat "$BODY"
+          echo
+
+          if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 300 ]; then
+            exit 1
+          fi

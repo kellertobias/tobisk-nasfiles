@@ -1,0 +1,159 @@
+import { useEffect, useState } from 'react';
+import type { FileEntry } from '../api/client';
+import api from '../api/client';
+import MarkdownPreview from '@uiw/react-markdown-preview';
+import { Icon } from './Icon';
+
+interface DirectoryReadmeProps {
+  entries: FileEntry[];
+  root?: string;
+  path?: string;
+  shareConfig?: { token: string; bearer: string; subPath: string };
+}
+
+export function DirectoryReadme({ entries, root, path, shareConfig }: DirectoryReadmeProps) {
+  const [content, setContent] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+
+  // Find README file
+  const readmeEntry =
+    entries.find((e) => e.name === 'README.md') ||
+    entries.find((e) => e.name === 'Readme.md') ||
+    entries.find((e) => e.name === 'readme.md');
+
+  useEffect(() => {
+    if (!readmeEntry) {
+      setContent(null);
+      return;
+    }
+    const fetchContent = async () => {
+      setLoading(true);
+      try {
+        let downloadUrl = '';
+        if (shareConfig) {
+          const entryPath = shareConfig.subPath ? `${shareConfig.subPath}/${readmeEntry.name}` : readmeEntry.name;
+          downloadUrl = api.shareDownloadUrl(shareConfig.token, shareConfig.bearer, entryPath);
+        } else if (root && path !== undefined) {
+          const entryPath = path ? `${path}/${readmeEntry.name}` : readmeEntry.name;
+          downloadUrl = api.downloadUrl(root, entryPath);
+        } else {
+          return;
+        }
+
+        const res = await fetch(downloadUrl, {
+          headers: { 'X-NasFiles-Request': '1' },
+        });
+        if (res.ok) {
+          setContent(await res.text());
+        }
+      } catch (e) {
+        console.error('Failed to load readme', e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchContent();
+  }, [readmeEntry, root, path, shareConfig]);
+
+  if (!readmeEntry || (!loading && !content)) {
+    return null;
+  }
+
+  const isCollapsed = !showAll && content;
+
+  return (
+    <div
+      className="fade-in lg:sticky lg:h-[calc(100vh-140px)] lg:top-[var(--space-4)]"
+      style={{
+        width: '100%',
+        maxWidth: 400,
+        flexShrink: 0,
+        background: 'var(--color-bg-subtle)',
+        borderRadius: 'var(--radius-lg)',
+        border: '1px solid var(--color-border)',
+        padding: 'var(--space-4)',
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 'var(--space-2)',
+        marginBottom: 'var(--space-3)',
+        color: 'var(--color-fg-muted)',
+        flexShrink: 0,
+      }}>
+        <Icon name="bookOpen" size={16} />
+        <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 'var(--tracking-wide)' }}>
+          {readmeEntry.name}
+        </span>
+      </div>
+
+      <div 
+        className={isCollapsed ? "max-h-[180px] lg:max-h-none" : ""}
+        style={{
+          fontSize: 'var(--text-sm)',
+          overflowY: 'auto', // Allow internal scrolling on desktop if readme is long
+          overflowX: 'hidden',
+          position: 'relative',
+          transition: 'max-height var(--duration-normal) var(--ease-out)',
+          flex: 1, // Take available height
+          minHeight: 0, // Prevent content bounding blowout
+        }}
+      >
+        {loading ? (
+          <div className="shimmer" style={{ height: 120, borderRadius: 'var(--radius-md)' }} />
+        ) : (
+          <div data-color-mode="dark">
+            <MarkdownPreview
+              source={content || ''}
+              style={{
+                backgroundColor: 'transparent',
+                color: 'var(--color-fg)',
+                padding: 0,
+              }}
+            />
+          </div>
+        )}
+        
+        {/* Fading overlay for mobile collapsed state ONLY */}
+        {isCollapsed && (
+          <div 
+            className="lg:hidden"
+            style={{
+              position: 'absolute',
+              bottom: 0,
+              left: 0,
+              right: 0,
+              height: 60,
+              background: 'linear-gradient(to top, var(--color-bg-subtle), transparent)',
+              pointerEvents: 'none',
+            }} 
+          />
+        )}
+      </div>
+
+      {content && (
+        <button
+          className="lg:hidden"
+          onClick={() => setShowAll(!showAll)}
+          style={{
+            marginTop: 'var(--space-2)',
+            color: 'var(--color-accent)',
+            fontSize: 'var(--text-sm)',
+            fontWeight: 500,
+            background: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+            textAlign: 'left',
+            flexShrink: 0,
+          }}
+        >
+          {showAll ? 'Show less' : 'Show all'}
+        </button>
+      )}
+    </div>
+  );
+}

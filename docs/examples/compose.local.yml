@@ -1,0 +1,43 @@
+services:
+  nasfiles:
+    # Use `build: .` when running from a checkout.
+    build: .
+    # If you publish an image, replace build with:
+    # image: ghcr.io/your-org/nasfiles:latest
+    restart: unless-stopped
+    ports:
+      # Optional SFTP server for normal users and temporary guests.
+      - "2222:2222"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.nasfiles.rule=Host(`${NASFILES_HOST}`)"
+      - "traefik.http.routers.nasfiles.entrypoints=websecure"
+      - "traefik.http.routers.nasfiles.tls=true"
+      - "traefik.http.routers.nasfiles.tls.certresolver=${TRAEFIK_CERT_RESOLVER:-letsencrypt}"
+      - "traefik.http.services.nasfiles.loadbalancer.server.port=8080"
+    environment:
+      BIND_ADDR: "0.0.0.0:8080"
+      BASE_URL: "https://${NASFILES_HOST}"
+      AUTH_MODE: "local"
+      SESSION_SECRET: "${SESSION_SECRET}"
+      DATA_DIR: "/data"
+      DB_URL: "sqlite:///data/nasfiles.db?mode=rwc"
+      COMMON_FOLDERS: '{"Files":"/files"}'
+      SETUP_ADMIN_USER: "admin"
+      SETUP_ADMIN_PASSWORD: "${SETUP_ADMIN_PASSWORD}"
+      SFTP_ENABLED: "true"
+      SFTP_BIND_ADDR: "0.0.0.0:2222"
+      RUST_LOG: "info"
+    volumes:
+      - nasfiles-data:/data
+      - ./files:/files
+    networks:
+      - proxy
+
+volumes:
+  nasfiles-data:
+
+networks:
+  proxy:
+    external: true

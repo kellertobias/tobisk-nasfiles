@@ -1,0 +1,94 @@
+[package]
+name = "nasfiles-server"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+build = "build.rs"
+
+[[bin]]
+name = "nasfiles"
+path = "src/main.rs"
+
+[dependencies]
+nasfiles-core = { path = "../nasfiles-core" }
+
+# Web framework
+axum = { version = "0.8", features = ["macros", "multipart"] }
+axum-extra = { version = "0.10", features = ["typed-header"] }
+tokio = { version = "1", features = ["full"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "set-header", "compression-gzip", "fs"] }
+
+# Sessions
+tower-sessions = "0.14"
+tower-sessions-sqlx-store = { version = "0.15", features = ["sqlite", "postgres"] }
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "any", "sqlite", "postgres"] }
+
+# Auth
+openidconnect = "4"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+argon2 = "0.5"
+subtle = "2"
+totp-rs = { version = "5.7", features = ["otpauth"] }
+webauthn-rs = { version = "0.5", features = ["danger-allow-state-serialisation"] }
+# webauthn-rs uses openssl through transitive crates; vendoring avoids a system libssl-dev dependency in CI.
+openssl = { version = "0.10", features = ["vendored"] }
+russh = "0.61"
+russh-sftp = "2.3"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Crypto / random
+sha2 = { workspace = true }
+base64ct = { workspace = true }
+rand = { workspace = true }
+rand_10 = { package = "rand", version = "0.10" }
+hmac = { workspace = true }
+hex = "0.4"
+
+# IDs / time
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Embedded assets
+rust-embed = { version = "8", features = ["compression"] }
+
+# Config
+figment = { version = "0.10", features = ["env"] }
+
+# MIME detection
+mime_guess = "2"
+
+# Streaming
+tokio-util = { version = "0.7", features = ["io", "compat"] }
+bytes = "1"
+
+# Concurrent collections
+dashmap = "6"
+
+# ZIP streaming
+async_zip = { version = "0.0.17", features = ["deflate", "tokio", "tokio-fs"] }
+futures-lite = "2"
+
+# Image processing (thumbnails)
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "tiff"] }
+resvg = "0.45"
+tiny-skia = "0.11"
+usvg = "0.45"
+
+# Temp files (for dev)
+tempfile = "3"
+aes-gcm = "0.10.3"
+libc = "0.2"

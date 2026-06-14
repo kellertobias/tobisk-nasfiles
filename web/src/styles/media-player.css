@@ -1,0 +1,20 @@
+/* ---- Video.js media preview ---- */
+.nasfiles-media-player .video-js {
+  color: #fff;
+}
+
+.nasfiles-media-player .video-js .vjs-icon-placeholder,
+.nasfiles-media-player .video-js .vjs-icon-placeholder::before {
+  font-family: VideoJS, sans-serif !important;
+  font-weight: normal;
+  font-style: normal;
+}
+
+.nasfiles-media-player .video-js .vjs-control-bar {
+  font-size: 12px;
+}
+
+.nasfiles-media-player .video-js .vjs-big-play-button .vjs-icon-placeholder::before,
+.nasfiles-media-player .video-js .vjs-button > .vjs-icon-placeholder::before {
+  line-height: inherit;
+}
