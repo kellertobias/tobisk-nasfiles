@@ -32,10 +32,6 @@ export function PreviewPane({
   const isMediaPreview = previewType === 'video' || previewType === 'audio';
   const [fileInfo, setFileInfo] = useState<FileEntry | null>(null);
   const downloadUrl = api.downloadUrl(root, entryPath);
-  const imagePreviewFormat = transparentPreviewFormat(entry.name);
-  const imagePreviewUrl = previewType === 'image' && entry.has_thumbnail
-    ? api.thumbnailUrl(root, entryPath, 1920, entry, 0, imagePreviewFormat)
-    : downloadUrl;
   const audioCoverUrl = previewType === 'audio' && entry.has_thumbnail
     ? api.thumbnailUrl(root, entryPath, 720, entry)
     : null;
@@ -50,6 +46,10 @@ export function PreviewPane({
   );
   const mediaInfo = fileInfo?.media_info ?? entry.media_info ?? null;
   const imageInfo = fileInfo?.image_info ?? entry.image_info ?? null;
+  const imagePreview = imagePreviewSource(entry, imageInfo);
+  const imagePreviewUrl = previewType === 'image' && imagePreview
+    ? api.thumbnailUrl(root, entryPath, imagePreview.width, entry, 0, imagePreview.format)
+    : downloadUrl;
   const mediaDetails = mediaInfo ? formatMediaDetails(mediaInfo) : [];
   const imageDetails = imageInfo ? formatImageDetails(imageInfo) : [];
 
@@ -340,6 +340,22 @@ function formatImageDetails(info: NonNullable<FileEntry['image_info']>): string[
 function transparentPreviewFormat(name: string): 'jpeg' | 'png' {
   const ext = name.split('.').pop()?.toLowerCase();
   return ext === 'png' || ext === 'webp' || ext === 'gif' || ext === 'svg' ? 'png' : 'jpeg';
+}
+
+function imagePreviewSource(
+  entry: FileEntry,
+  info: FileEntry['image_info'] | null | undefined,
+): { width: number; format: 'jpeg' | 'png' } | null {
+  if (!entry.has_thumbnail || !info) return null;
+
+  const ext = entry.name.split('.').pop()?.toLowerCase();
+  const limit = ext === 'png' ? 2000 : 1080;
+  if (info.width <= limit && info.height <= limit) return null;
+
+  return {
+    width: limit,
+    format: transparentPreviewFormat(entry.name),
+  };
 }
 
 function formatDuration(durationMs: number): string {

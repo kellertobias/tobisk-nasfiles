@@ -341,16 +341,16 @@ pub async fn share_info(
         } else {
             format!("{}/{}", share.relative_path, query.path)
         };
-        match image_info::get_or_probe(
-            &state.config.thumbnail_cache_dir,
-            &resolved,
-            &share.root_kind,
-            &share.root_key,
-            &cache_relative_path,
-            state.config.thumbnail_max_image_width,
-            state.config.thumbnail_max_image_height,
-            state.config.thumbnail_max_image_alloc,
-        )
+        match image_info::get_or_probe(image_info::ImageInfoProbeRequest {
+            cache_dir: &state.config.thumbnail_cache_dir,
+            source_path: &resolved,
+            root_kind: &share.root_kind,
+            root_key: &share.root_key,
+            relative_path: &cache_relative_path,
+            max_image_width: state.config.thumbnail_max_image_width,
+            max_image_height: state.config.thumbnail_max_image_height,
+            max_alloc: state.config.thumbnail_max_image_alloc,
+        })
         .await
         {
             Ok(info) => info,

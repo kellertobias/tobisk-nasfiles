@@ -9,7 +9,7 @@ use serde::Deserialize;
 use crate::auth::middleware::CurrentUser;
 use crate::fs::roots;
 use crate::state::AppState;
-use crate::thumb::cache::ThumbFormat;
+use crate::thumb::cache::{ThumbFormat, ThumbnailRequest};
 
 #[derive(Deserialize)]
 pub struct ThumbnailQuery {
@@ -82,12 +82,14 @@ pub async fn get_thumbnail(
 
     let result = thumb_cache
         .get_or_generate(
-            &resolved,
-            root_kind,
-            &root_key,
-            &query.path,
-            width,
-            requested_format,
+            ThumbnailRequest {
+                source_path: &resolved,
+                root_kind,
+                root_key: &root_key,
+                relative_path: &query.path,
+                width,
+                requested_format,
+            },
             &state.config,
         )
         .await

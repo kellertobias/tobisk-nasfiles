@@ -8,21 +8,25 @@ use crate::thumb::cache::ThumbnailCache;
 
 const MAX_EXIF_STRING_LEN: usize = 256;
 
+pub struct ImageInfoProbeRequest<'a> {
+    pub cache_dir: &'a Path,
+    pub source_path: &'a Path,
+    pub root_kind: &'a str,
+    pub root_key: &'a str,
+    pub relative_path: &'a str,
+    pub max_image_width: u32,
+    pub max_image_height: u32,
+    pub max_alloc: u64,
+}
+
 pub async fn get_or_probe(
-    cache_dir: &Path,
-    source_path: &Path,
-    root_kind: &str,
-    root_key: &str,
-    relative_path: &str,
-    max_image_width: u32,
-    max_image_height: u32,
-    max_alloc: u64,
+    request: ImageInfoProbeRequest<'_>,
 ) -> Result<Option<ImageInfo>, ImageInfoError> {
-    if !is_image(source_path) {
+    if !is_image(request.source_path) {
         return Ok(None);
     }
 
-    let metadata = tokio::fs::metadata(source_path)
+    let metadata = tokio::fs::metadata(request.source_path)
         .await
         .map_err(|e| ImageInfoError::Io(e.to_string()))?;
 
@@ -33,15 +37,15 @@ pub async fn get_or_probe(
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
 
-    let cache_root_kind = format!("image-info-v1:{root_kind}");
+    let cache_root_kind = format!("image-info-v1:{}", request.root_kind);
     let key = ThumbnailCache::cache_key(
         &cache_root_kind,
-        root_key,
-        relative_path,
+        request.root_key,
+        request.relative_path,
         mtime_ms,
         metadata.len(),
     );
-    let cache_path = cache_path(cache_dir, &key);
+    let cache_path = cache_path(request.cache_dir, &key);
 
     if cache_path.exists() {
         let bytes = tokio::fs::read(&cache_path)
@@ -52,7 +56,10 @@ pub async fn get_or_probe(
         return Ok(Some(info));
     }
 
-    let source = source_path.to_path_buf();
+    let source = request.source_path.to_path_buf();
+    let max_image_width = request.max_image_width;
+    let max_image_height = request.max_image_height;
+    let max_alloc = request.max_alloc;
     let info = tokio::task::spawn_blocking(move || {
         probe(&source, max_image_width, max_image_height, max_alloc)
     })

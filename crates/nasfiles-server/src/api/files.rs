@@ -282,16 +282,16 @@ pub async fn file_info(
         && !is_dir
         && mime_type.as_ref().is_some_and(|m| m.starts_with("image/"))
     {
-        match image_info::get_or_probe(
-            &state.config.thumbnail_cache_dir,
-            &resolved,
+        match image_info::get_or_probe(image_info::ImageInfoProbeRequest {
+            cache_dir: &state.config.thumbnail_cache_dir,
+            source_path: &resolved,
             root_kind,
-            &root_key,
-            &query.path,
-            state.config.thumbnail_max_image_width,
-            state.config.thumbnail_max_image_height,
-            state.config.thumbnail_max_image_alloc,
-        )
+            root_key: &root_key,
+            relative_path: &query.path,
+            max_image_width: state.config.thumbnail_max_image_width,
+            max_image_height: state.config.thumbnail_max_image_height,
+            max_alloc: state.config.thumbnail_max_image_alloc,
+        })
         .await
         {
             Ok(info) => info,

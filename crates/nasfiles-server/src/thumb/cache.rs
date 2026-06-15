@@ -60,6 +60,15 @@ pub struct ThumbnailCacheKeyInput<'a> {
     pub format: ThumbFormat,
 }
 
+pub struct ThumbnailRequest<'a> {
+    pub source_path: &'a Path,
+    pub root_kind: &'a str,
+    pub root_key: &'a str,
+    pub relative_path: &'a str,
+    pub width: u32,
+    pub requested_format: Option<ThumbFormat>,
+}
+
 /// Thumbnail cache with per-file generation mutex.
 ///
 /// Thumbnail keys include generator version, kind, format, root, relative path,
@@ -132,16 +141,11 @@ impl ThumbnailCache {
     /// Returns `None` if the file type is unsupported.
     pub async fn get_or_generate(
         &self,
-        source_path: &Path,
-        root_kind: &str,
-        root_key: &str,
-        relative_path: &str,
-        width: u32,
-        requested_format: Option<ThumbFormat>,
+        request: ThumbnailRequest<'_>,
         config: &AppConfig,
     ) -> Result<Option<Thumbnail>, ThumbError> {
         // Get file metadata for cache key
-        let metadata = tokio::fs::metadata(source_path)
+        let metadata = tokio::fs::metadata(request.source_path)
             .await
             .map_err(|e| ThumbError::Io(e.to_string()))?;
 
@@ -152,22 +156,22 @@ impl ThumbnailCache {
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
 
-        let Some(kind) = ThumbnailKind::from_path(source_path) else {
+        let Some(kind) = ThumbnailKind::from_path(request.source_path) else {
             return Ok(None);
         };
-        let format = match (kind, requested_format) {
+        let format = match (kind, request.requested_format) {
             (ThumbnailKind::Image | ThumbnailKind::Svg, Some(format)) => format,
             (ThumbnailKind::Svg, None) => ThumbFormat::Png,
             _ => ThumbFormat::Jpeg,
         };
 
         let key = Self::thumbnail_cache_key(ThumbnailCacheKeyInput {
-            root_kind,
-            root_key,
-            relative_path,
+            root_kind: request.root_kind,
+            root_key: request.root_key,
+            relative_path: request.relative_path,
             mtime_ms,
             file_size: metadata.len(),
-            width,
+            width: request.width,
             kind,
             format,
         });
@@ -175,14 +179,14 @@ impl ThumbnailCache {
             version: THUMBNAIL_STORAGE_VERSION,
             key: key.clone(),
             format: format.as_key().to_string(),
-            width,
+            width: request.width,
             source_mtime_ms: mtime_ms,
             source_size: metadata.len(),
         };
 
         if let Some(bytes) = self
             .storage
-            .read(source_path, &key, format, &storage_meta)
+            .read(request.source_path, &key, format, &storage_meta)
             .await?
         {
             return Ok(Some(Thumbnail {
@@ -213,7 +217,7 @@ impl ThumbnailCache {
 
         if let Some(bytes) = self
             .storage
-            .read(source_path, &key, format, &storage_meta)
+            .read(request.source_path, &key, format, &storage_meta)
             .await?
         {
             return Ok(Some(Thumbnail {
@@ -232,8 +236,8 @@ impl ThumbnailCache {
         let thumb_bytes = match kind {
             ThumbnailKind::Image => {
                 img_thumb::generate(
-                    source_path,
-                    width,
+                    request.source_path,
+                    request.width,
                     format,
                     config.thumbnail_max_image_width,
                     config.thumbnail_max_image_height,
@@ -241,23 +245,23 @@ impl ThumbnailCache {
                 )
                 .await?
             }
-            ThumbnailKind::Video => vid_thumb::generate(source_path, width).await?,
+            ThumbnailKind::Video => vid_thumb::generate(request.source_path, request.width).await?,
             ThumbnailKind::Audio => {
                 audio_thumb::generate(
-                    source_path,
-                    width,
+                    request.source_path,
+                    request.width,
                     config.thumbnail_max_image_width,
                     config.thumbnail_max_image_height,
                     config.thumbnail_max_image_alloc,
                 )
                 .await?
             }
-            ThumbnailKind::Pdf => pdf_thumb::generate(source_path, width).await?,
-            ThumbnailKind::Text => text_thumb::generate(source_path, width).await?,
+            ThumbnailKind::Pdf => pdf_thumb::generate(request.source_path, request.width).await?,
+            ThumbnailKind::Text => text_thumb::generate(request.source_path, request.width).await?,
             ThumbnailKind::Epub => {
                 epub_thumb::generate(
-                    source_path,
-                    width,
+                    request.source_path,
+                    request.width,
                     config.thumbnail_max_image_width,
                     config.thumbnail_max_image_height,
                     config.thumbnail_max_image_alloc,
@@ -266,8 +270,8 @@ impl ThumbnailCache {
             }
             ThumbnailKind::Svg => {
                 svg_thumb::generate(
-                    source_path,
-                    width,
+                    request.source_path,
+                    request.width,
                     config.thumbnail_max_image_width,
                     config.thumbnail_max_image_height,
                 )
@@ -277,7 +281,7 @@ impl ThumbnailCache {
 
         if let Some(ref bytes) = thumb_bytes {
             self.storage
-                .write(source_path, &key, format, &storage_meta, bytes)
+                .write(request.source_path, &key, format, &storage_meta, bytes)
                 .await?;
         }
 
