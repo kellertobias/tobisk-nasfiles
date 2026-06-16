@@ -60,6 +60,7 @@ For complete setup guides, see:
 - [Docker Compose with SSO/OIDC](docs/sso.md)
 - [TrueNAS setup example](docs/truenas.md)
 - [Configuration reference](docs/configuration.md)
+- [Security model & operational notes](docs/security.md)
 
 we sadly do not yet offer prebuilt docker images, this will follow in a future update.
 

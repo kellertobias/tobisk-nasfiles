@@ -77,6 +77,32 @@ impl AuthUser {
     }
 }
 
+/// Validate a username for safety before it is stored or used to derive a
+/// home-directory path.
+///
+/// Home directories are keyed on `sanitize_username`, which collapses path
+/// separators and `..` to `_`. That mapping is *not* injective — `a/b`,
+/// `a..b`, and `a_b` would all map to the same directory — so two distinct
+/// identities could otherwise share one home folder. Rejecting these
+/// characters at the source keeps the sanitized name a faithful, collision-free
+/// representation of the username. Control characters and NUL are rejected for
+/// the same filesystem-safety reasons as `validate_filename`.
+pub fn validate_username(username: &str) -> Result<(), &'static str> {
+    if username.is_empty() {
+        return Err("username is required");
+    }
+    if username.contains('/') || username.contains('\\') {
+        return Err("username must not contain '/' or '\\'");
+    }
+    if username.contains("..") {
+        return Err("username must not contain '..'");
+    }
+    if username.chars().any(|c| c.is_control()) {
+        return Err("username must not contain control characters");
+    }
+    Ok(())
+}
+
 /// A root folder visible to the user.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Root {
@@ -300,5 +326,31 @@ mod tests {
         );
         user.folder_permissions.remove("test");
         assert!(user.effectively_no_access());
+    }
+
+    #[test]
+    fn validate_username_accepts_normal_names() {
+        for name in ["alice", "bob.smith", "user_01", "jane-doe", "auth0|abc123"] {
+            assert!(validate_username(name).is_ok(), "{name} should be valid");
+        }
+    }
+
+    #[test]
+    fn validate_username_rejects_collision_prone_and_unsafe_names() {
+        for name in ["", "a/b", "a\\b", "a..b", "..", "a\0b", "a\tb"] {
+            assert!(
+                validate_username(name).is_err(),
+                "{name:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_username_rejects_what_sanitize_would_collapse() {
+        // Any name that survives validation must already be a faithful,
+        // collision-free home-dir key (sanitize is then a no-op on it).
+        for name in ["alice", "bob.smith", "user_01"] {
+            assert_eq!(AuthUser::sanitize_username(name), name);
+        }
     }
 }

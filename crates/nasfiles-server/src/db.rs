@@ -37,6 +37,7 @@ pub async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
         include_str!("../../../migrations/003_sftp.sql"),
         include_str!("../../../migrations/004_local_auth.sql"),
         include_str!("../../../migrations/005_file_operations.sql"),
+        include_str!("../../../migrations/006_login_attempts_ip_idx.sql"),
     ];
 
     for migration_sql in migrations {

@@ -352,11 +352,13 @@ impl AppConfig {
                 .unwrap_or(2)
                 .max(1);
 
-        // Share token bytes
+        // Share token bytes. Clamp to a minimum of 16 bytes (128 bits) so an
+        // operator cannot configure a dangerously short, brute-forceable token.
         let share_token_bytes: usize = std::env::var("SHARE_TOKEN_BYTES")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(24);
+            .unwrap_or(24)
+            .max(16);
 
         let sftp_enabled = std::env::var("SFTP_ENABLED")
             .map(|v| v == "1" || v.to_lowercase() == "true")

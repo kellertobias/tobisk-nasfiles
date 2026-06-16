@@ -125,6 +125,8 @@ export interface AuthConfig {
   sso_enabled: boolean;
   passkeys_enabled: boolean;
   totp_enabled: boolean;
+  /** True when dev mode is bypassing real authentication (synthetic dev user). */
+  dev_auth_bypass: boolean;
 }
 
 export interface ServerCapabilities {

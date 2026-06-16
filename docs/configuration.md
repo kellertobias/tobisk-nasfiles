@@ -130,7 +130,9 @@ Video thumbnails and media previews depend on `ffmpeg`/`ffprobe`. PDF thumbnails
 
 | Variable | Default | Description |
 |---|---|---|
-| `SHARE_TOKEN_BYTES` | `24` | Number of random bytes used for share tokens. |
+| `SHARE_TOKEN_BYTES` | `24` | Number of random bytes used for share tokens. Clamped to a minimum of `16` (128 bits); lower values are raised to `16`. |
+
+See [Security model](security.md) for how share links, bearer tokens, and file-operation jobs behave around revocation.
 
 ## SFTP
 

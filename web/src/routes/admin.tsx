@@ -427,6 +427,11 @@ function SftpGuestsTab() {
 									<td style={tdStyle}>
 										<div style={{ display: "flex", gap: "var(--space-1)", justifyContent: "flex-end" }}>
 											<select
+												title={
+													revoked
+														? "Extending a revoked guest re-enables its key and restores access until the new expiry."
+														: "Set a new expiry for this guest. Note: extending a revoked guest re-enables its key."
+												}
 												onChange={(e) => {
 													if (e.target.value) {
 														extendMutation.mutate({ id: u.id, expiresIn: Number(e.target.value) });

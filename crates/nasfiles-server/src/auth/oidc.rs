@@ -313,6 +313,27 @@ pub async fn callback(
         .or_else(|| claims.preferred_username().map(|u| u.to_string()))
         .unwrap_or_else(|| subject.clone());
 
+    // Reject usernames that would not map injectively to a home directory.
+    // The home path is keyed on `sanitize_username`, which collapses '/', '\\',
+    // and '..'; allowing those characters would let two distinct identities
+    // share one home folder. Deny rather than silently sanitize so the
+    // collision can never occur.
+    if let Err(reason) = nasfiles_core::models::validate_username(&username) {
+        tracing::warn!(
+            user = %username,
+            external_id = %external_id,
+            "User rejected at login: unsafe username ({reason})"
+        );
+        let msg = format!(
+            "Your account username is not allowed ({reason}). Contact your administrator."
+        );
+        return Ok((
+            axum::http::StatusCode::FORBIDDEN,
+            axum::response::Html(format!("<h1>Access Denied</h1><p>{}</p>", msg)),
+        )
+            .into_response());
+    }
+
     let display_name = extract_claim(&extra_claims, &state.config.sso_display_name_claim)
         .or_else(|| {
             claims

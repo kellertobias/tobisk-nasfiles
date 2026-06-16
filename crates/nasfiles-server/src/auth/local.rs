@@ -193,6 +193,8 @@ pub async fn ensure_setup_admin(config: &AppConfig, pool: &AnyPool) -> anyhow::R
     };
 
     let username = setup.username.trim();
+    nasfiles_core::models::validate_username(username)
+        .map_err(|msg| anyhow::anyhow!("invalid SETUP_ADMIN_USER: {msg}"))?;
     let normalized = normalize_username(username);
     validate_setup_admin_password(&setup.password)?;
     let fingerprint = setup_password_fingerprint(config, &setup.password)?;
@@ -282,6 +284,10 @@ pub async fn auth_config(State(state): State<AppState>) -> impl IntoResponse {
         "sso_enabled": matches!(state.config.auth_mode, AuthMode::Sso),
         "passkeys_enabled": matches!(state.config.auth_mode, AuthMode::Local) && !state.config.disable_passkeys && state.webauthn.is_some(),
         "totp_enabled": matches!(state.config.auth_mode, AuthMode::Local) && !state.config.disable_totp,
+        // True only when dev mode is active AND a synthetic dev user is configured,
+        // i.e. the auth middleware is bypassing real authentication. Drives the
+        // red dev-mode warning bar in the UI.
+        "dev_auth_bypass": state.config.dev_mode && state.config.dev_user.is_some(),
     }))
 }
 
@@ -294,8 +300,11 @@ pub async fn login(
     require_local_mode(&state)?;
     require_local_auth_header(&headers)?;
     let normalized = normalize_username(&body.username);
+    let ip = client_ip(&headers);
 
-    if is_login_rate_limited(&state.pool, &normalized).await {
+    if is_login_rate_limited(&state.pool, &normalized).await
+        || is_login_rate_limited_by_ip(&state.pool, ip.as_deref()).await
+    {
         record_attempt(
             &state.pool,
             &normalized,
@@ -842,9 +851,8 @@ pub async fn create_user(
 ) -> Result<impl IntoResponse, Response> {
     require_admin_local(&state, &admin)?;
     let username = body.username.trim();
-    if username.is_empty() {
-        return Err(api_error(StatusCode::BAD_REQUEST, "username is required"));
-    }
+    nasfiles_core::models::validate_username(username)
+        .map_err(|msg| api_error(StatusCode::BAD_REQUEST, msg))?;
     let normalized = normalize_username(username);
     let password = generate_xkcd_password();
     let password_hash = hash_password(&password).map_err(internal_error)?;
@@ -1662,8 +1670,19 @@ async fn revoke_trusted_device_for_user(
     Ok(())
 }
 
+/// Max failed login attempts for a single username within the window before
+/// the username is throttled.
+const LOGIN_RATE_LIMIT_PER_USERNAME: i64 = 10;
+/// Max failed login attempts from a single client IP (across all usernames)
+/// within the window before that IP is throttled. Higher than the per-username
+/// limit so a shared/NAT'd source is not locked out by a few users, but low
+/// enough to throttle password-spraying across many usernames from one source.
+const LOGIN_RATE_LIMIT_PER_IP: i64 = 30;
+/// Rolling window for login rate limiting, in milliseconds.
+const LOGIN_RATE_LIMIT_WINDOW_MS: i64 = 5 * 60 * 1000;
+
 async fn is_login_rate_limited(pool: &AnyPool, normalized: &str) -> bool {
-    let since = now_ms() - 5 * 60 * 1000;
+    let since = now_ms() - LOGIN_RATE_LIMIT_WINDOW_MS;
     sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM local_auth_attempts WHERE username_normalized = $1 AND success = FALSE AND occurred_at >= $2",
     )
@@ -1672,7 +1691,39 @@ async fn is_login_rate_limited(pool: &AnyPool, normalized: &str) -> bool {
     .fetch_one(pool)
     .await
     .unwrap_or(0)
-        >= 10
+        >= LOGIN_RATE_LIMIT_PER_USERNAME
+}
+
+/// Throttle by client IP so password-spraying across many usernames from one
+/// source is caught even though each individual username stays under its own
+/// limit. Skips throttling when no client IP can be determined (e.g. no trusted
+/// proxy headers), matching `record_attempt`'s best-effort IP capture.
+async fn is_login_rate_limited_by_ip(pool: &AnyPool, ip: Option<&str>) -> bool {
+    let Some(ip) = ip else {
+        return false;
+    };
+    let since = now_ms() - LOGIN_RATE_LIMIT_WINDOW_MS;
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM local_auth_attempts WHERE ip = $1 AND success = FALSE AND occurred_at >= $2",
+    )
+    .bind(ip)
+    .bind(since)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0)
+        >= LOGIN_RATE_LIMIT_PER_IP
+}
+
+/// Best-effort client IP from trusted proxy headers. Only reliable when the
+/// server sits behind a proxy that sets these (e.g. Traefik); without one there
+/// is no dependable client IP at this layer, so this returns `None`.
+fn client_ip(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-forwarded-for")
+        .or_else(|| headers.get("x-real-ip"))
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.split(',').next().unwrap_or(v).trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 async fn record_attempt(
@@ -1682,11 +1733,7 @@ async fn record_attempt(
     success: bool,
     reason: Option<&str>,
 ) {
-    let ip = headers
-        .get("x-forwarded-for")
-        .or_else(|| headers.get("x-real-ip"))
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.split(',').next().unwrap_or(v).trim().to_string());
+    let ip = client_ip(headers);
     let _ = sqlx::query(
         r#"
         INSERT INTO local_auth_attempts
