@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS file_operation_jobs (
 CREATE INDEX IF NOT EXISTS file_operation_jobs_owner_idx ON file_operation_jobs(owner_user_id, created_at);
 CREATE INDEX IF NOT EXISTS file_operation_jobs_status_idx ON file_operation_jobs(status);
 
+ALTER TABLE file_operation_jobs ADD COLUMN owner_user_json TEXT NOT NULL DEFAULT '{}';
+
 CREATE TABLE IF NOT EXISTS file_operation_items (
     id              TEXT PRIMARY KEY,
     job_id          TEXT NOT NULL REFERENCES file_operation_jobs(id),

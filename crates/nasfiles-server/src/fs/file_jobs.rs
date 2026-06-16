@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -178,7 +179,7 @@ impl FileJobStore {
                 if dest_path.is_empty() {
                     continue;
                 }
-                if let Ok(target) = resolve_user_path(
+                if let Ok(target) = resolve_user_create_path(
                     config,
                     &job.owner_user,
                     &job.dest_root,
@@ -428,9 +429,12 @@ impl FileJob {
     fn from_row(row: sqlx::any::AnyRow) -> Result<Self, FileOpError> {
         let paths_json: String = row.try_get("paths_json").map_err(db_error)?;
         let paths = serde_json::from_str(&paths_json).unwrap_or_default();
-        let owner_user_json: String = row.try_get("owner_user_json").map_err(db_error)?;
+        let owner_user_id: String = row.try_get("owner_user_id").map_err(db_error)?;
+        let owner_user_json = row
+            .try_get::<String, _>("owner_user_json")
+            .unwrap_or_default();
         let owner_user = serde_json::from_str(&owner_user_json)
-            .map_err(|e| FileOpError::Io(format!("invalid stored file job user snapshot: {e}")))?;
+            .unwrap_or_else(|_| legacy_owner_user(&owner_user_id));
         Ok(Self {
             id: row.try_get("id").map_err(db_error)?,
             owner_user,
@@ -458,6 +462,19 @@ impl FileJob {
             finished_at: row.try_get("finished_at").map_err(db_error)?,
             cancel_requested: row.try_get("cancel_requested").map_err(db_error)?,
         })
+    }
+}
+
+fn legacy_owner_user(user_id: &str) -> AuthUser {
+    AuthUser {
+        user_id: user_id.to_string(),
+        external_id: user_id.to_string(),
+        username: user_id.to_string(),
+        display_name: user_id.to_string(),
+        picture_url: None,
+        folder_permissions: HashMap::new(),
+        has_home: false,
+        is_admin: false,
     }
 }
 
@@ -908,7 +925,7 @@ async fn execute_copy_like_job(
             &item.source_path,
             source_cap,
         )?;
-        let target = resolve_user_path(
+        let target = resolve_user_create_path(
             &state.config,
             &job.owner_user,
             &job.dest_root,
@@ -1145,6 +1162,19 @@ fn resolve_user_path(
     let root = roots::resolve_root(config, user, root_key, cap)
         .map_err(|e| FileOpError::Root(e.to_string()))?;
     nasfiles_core::safe_path::resolve(&root, relative_path)
+        .map_err(|e| FileOpError::Path(e.to_string()))
+}
+
+fn resolve_user_create_path(
+    config: &crate::config::AppConfig,
+    user: &AuthUser,
+    root_key: &str,
+    relative_path: &str,
+    cap: roots::RequiredCap,
+) -> Result<PathBuf, FileOpError> {
+    let root = roots::resolve_root(config, user, root_key, cap)
+        .map_err(|e| FileOpError::Root(e.to_string()))?;
+    nasfiles_core::safe_path::resolve_parent(&root, relative_path)
         .map_err(|e| FileOpError::Path(e.to_string()))
 }
 
