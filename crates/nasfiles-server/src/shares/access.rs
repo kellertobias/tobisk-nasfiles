@@ -62,7 +62,7 @@ impl ShareRateLimiter {
 
         // Evict stale entries every 100 calls to bound map growth.
         let n = self.call_count.fetch_add(1, Ordering::Relaxed);
-        if n % 100 == 0 {
+        if n.is_multiple_of(100) {
             self.evict_expired(now);
         }
     }
