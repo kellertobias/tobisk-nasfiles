@@ -294,6 +294,7 @@ async fn main() -> anyhow::Result<()> {
             "/shares/{token}/preview-status",
             get(api::public::share_preview_status),
         )
+        .route("/shares/{token}/upload", post(api::public::share_upload))
         .route("/shares/{token}/zip", post(api::public::share_zip));
 
     // Health check

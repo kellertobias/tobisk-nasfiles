@@ -1,5 +1,5 @@
 import { createFileRoute, useParams, useNavigate } from '@tanstack/react-router';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import api from '../api/client';
 import type { FileEntry } from '../api/client';
@@ -39,6 +39,10 @@ function ShareViewer() {
   const [authError, setAuthError] = useState('');
   const [singleFileInfo, setSingleFileInfo] = useState<FileEntry | null>(null);
   const [previewTarget, setPreviewTarget] = useState<{ entry: FileEntry; path: string } | null>(null);
+  const [uploadItems, setUploadItems] = useState<Array<{ id: string; name: string; progress: number; status: 'uploading' | 'done' | 'error' }>>([]);
+  const [showUploadProgress, setShowUploadProgress] = useState(false);
+  const uploadFileInputRef = useRef<HTMLInputElement>(null);
+  const uploadHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const listScrollRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line react-hooks/incompatible-library
   const rowVirtualizer = useVirtualizer({
@@ -115,6 +119,50 @@ function ShareViewer() {
       window.open(api.shareDownloadUrl(token, bearer, path), '_blank');
     }
   }, [token, bearer]);
+
+  // Cancel pending upload auto-hide on unmount.
+  useEffect(() => () => { if (uploadHideTimerRef.current) clearTimeout(uploadHideTimerRef.current); }, []);
+
+  const handleShareUpload = useCallback(async (files: File[]) => {
+    if (!bearer || files.length === 0) return;
+    if (uploadHideTimerRef.current) { clearTimeout(uploadHideTimerRef.current); uploadHideTimerRef.current = null; }
+
+    const items = files.map((f, i) => ({ id: `${Date.now()}-${i}`, name: f.name, progress: 0, status: 'uploading' as const }));
+    setUploadItems(items);
+    setShowUploadProgress(true);
+
+    await Promise.allSettled(
+      items.map(async (item, idx) => {
+        try {
+          await api.shareUpload(token, bearer, subPath, [files[idx]], (pct) => {
+            setUploadItems((prev) => prev.map((u) => u.id === item.id ? { ...u, progress: pct } : u));
+          });
+          setUploadItems((prev) => prev.map((u) => u.id === item.id ? { ...u, status: 'done', progress: 100 } : u));
+        } catch {
+          setUploadItems((prev) => prev.map((u) => u.id === item.id ? { ...u, status: 'error' } : u));
+        }
+      })
+    );
+
+    // Refresh listing
+    if (meta?.is_directory) {
+      const listing = await api.shareList(token, bearer, subPath).catch(() => null);
+      if (listing) setEntries(listing.entries);
+    }
+
+    uploadHideTimerRef.current = setTimeout(() => {
+      setShowUploadProgress(false);
+      setUploadItems([]);
+      uploadHideTimerRef.current = null;
+    }, 2000);
+  }, [bearer, token, subPath, meta?.is_directory]);
+
+  const uploadProgressOverall = useMemo(() =>
+    uploadItems.length > 0
+      ? Math.round(uploadItems.reduce((s, u) => s + u.progress, 0) / uploadItems.length)
+      : 0,
+    [uploadItems],
+  );
 
   const previewDialog = previewTarget && bearer ? (
     <ShareMediaPreviewDialog
@@ -330,6 +378,43 @@ function ShareViewer() {
             {meta?.expires_at && <span> · Expires {formatDate(meta.expires_at)}</span>}
           </div>
         </div>
+        {meta?.allow_upload && (
+          <>
+            <input
+              ref={uploadFileInputRef}
+              type="file"
+              multiple
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const files = Array.from(e.target.files || []);
+                if (e.target) (e.target as HTMLInputElement).value = '';
+                handleShareUpload(files);
+              }}
+            />
+            <button
+              onClick={() => uploadFileInputRef.current?.click()}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 'var(--space-2)',
+                padding: 'var(--space-2) var(--space-3)',
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--color-bg)',
+                color: 'var(--color-fg)',
+                cursor: 'pointer',
+                fontWeight: 500,
+                fontSize: 'var(--text-sm)',
+                transition: 'background var(--duration-fast)',
+              }}
+              onMouseOver={(e) => { e.currentTarget.style.background = 'var(--color-bg-muted)'; }}
+              onMouseOut={(e) => { e.currentTarget.style.background = 'var(--color-bg)'; }}
+            >
+              <Icon name="upload" size={16} />
+              Upload
+            </button>
+          </>
+        )}
         {meta?.allow_download && entries.length > 0 && (
           <button
             onClick={() => api.shareDownloadZip(token, bearer, [subPath || ''])}
@@ -468,6 +553,39 @@ function ShareViewer() {
         )}
       </div>
       {previewDialog}
+
+      {/* Upload progress panel */}
+      {showUploadProgress && (
+        <div style={{
+          position: 'fixed',
+          bottom: 'var(--space-6)',
+          right: 'var(--space-6)',
+          width: 300,
+          background: 'var(--color-bg)',
+          border: '1px solid var(--color-border)',
+          borderRadius: 'var(--radius-lg)',
+          boxShadow: 'var(--shadow-lg)',
+          padding: 'var(--space-4)',
+          zIndex: 50,
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 'var(--space-2)', fontSize: 'var(--text-sm)', fontWeight: 600 }}>
+            <span>Uploading {uploadItems.filter(u => u.status === 'done').length}/{uploadItems.length}</span>
+            <span style={{ color: 'var(--color-fg-muted)' }}>{uploadProgressOverall}%</span>
+          </div>
+          <div style={{ height: 4, borderRadius: 2, background: 'var(--color-bg-muted)', overflow: 'hidden', marginBottom: 'var(--space-3)' }}>
+            <div style={{ height: '100%', width: `${uploadProgressOverall}%`, background: 'var(--color-accent)', borderRadius: 2, transition: 'width 200ms ease-out' }} />
+          </div>
+          {uploadItems.slice(0, 8).map((item) => (
+            <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', padding: 'var(--space-1) 0', fontSize: 'var(--text-xs)' }}>
+              <span style={{ color: item.status === 'done' ? 'var(--color-success)' : item.status === 'error' ? 'var(--color-danger)' : 'var(--color-fg-muted)' }}>
+                {item.status === 'done' ? '✓' : item.status === 'error' ? '✗' : '⋯'}
+              </span>
+              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</span>
+              <span className="tabular-nums" style={{ color: 'var(--color-fg-subtle)' }}>{item.progress}%</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

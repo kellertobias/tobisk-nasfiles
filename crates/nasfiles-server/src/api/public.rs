@@ -1,12 +1,12 @@
 use axum::{
     Json,
-    extract::{OriginalUri, Path, Query, State},
+    extract::{Multipart, OriginalUri, Path, Query, State},
     http::Uri,
     response::IntoResponse,
 };
 use serde::Deserialize;
 
-use crate::fs::{image_info, listing, media_info, stream};
+use crate::fs::{image_info, listing, media_info, ops, stream};
 use crate::shares::{access, audit, bearer, model::ShareAuthRequest};
 use crate::state::AppState;
 use crate::thumb::kind;
@@ -469,6 +469,78 @@ pub async fn share_preview_status(
         )
             .into_response(),
     }
+}
+
+/// POST /api/public/shares/:token/upload?path= — upload files to a share that allows uploads.
+pub async fn share_upload(
+    State(state): State<AppState>,
+    Path(raw_token): Path<String>,
+    Query(query): Query<ShareListQuery>,
+    headers: axum::http::HeaderMap,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    let share = match access::resolve_share(&state.pool, &raw_token).await {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+
+    if !share.allow_upload {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "upload not allowed on this share"})),
+        )
+            .into_response();
+    }
+
+    if let Err(e) = verify_request_bearer(&state, &headers, &share.id) {
+        return e.into_response();
+    }
+
+    let dest_dir =
+        match access::resolve_share_path(&state.pool, &state.config, &share, &query.path).await {
+            Ok(p) => p,
+            Err(e) => return e.into_response(),
+        };
+
+    if !dest_dir.is_dir() {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "path is not a directory"})),
+        )
+            .into_response();
+    }
+
+    let max_size = state.config.max_upload_file_size;
+    let mut count = 0u32;
+
+    loop {
+        let mut field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": format!("multipart error: {e}")})),
+                )
+                    .into_response();
+            }
+        };
+        let filename = field
+            .file_name()
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("upload-{count}"));
+        if let Err(e) = ops::receive_upload_raw(&dest_dir, &filename, &mut field, max_size).await {
+            return e.into_response();
+        }
+        count += 1;
+    }
+
+    let ip = extract_ip(&headers);
+    let ua = extract_user_agent(&headers);
+    let _ =
+        audit::log_access(&state.pool, &share.id, ip, ua, "upload", Some(&query.path)).await;
+
+    Json(serde_json::json!({"ok": true, "files_uploaded": count})).into_response()
 }
 
 /// POST /api/public/shares/:token/zip — download selected paths as a ZIP archive within share scope.

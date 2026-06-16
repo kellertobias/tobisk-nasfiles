@@ -581,7 +581,7 @@ export const api = {
 
       xhr.addEventListener('load', () => {
         if (xhr.status >= 200 && xhr.status < 300) {
-          resolve(JSON.parse(xhr.responseText));
+          resolve((parseJsonResponse(xhr.responseText) as { ok: boolean; files_uploaded: number }) ?? { ok: true, files_uploaded: 0 });
         } else {
           reject(new ApiError(xhr.status, xhr.statusText, parseJsonResponse(xhr.responseText)));
         }
@@ -800,6 +800,36 @@ export const api = {
 
       xhr.addEventListener('error', () => reject(new ApiError(0, 'Network error', null)));
       xhr.send(JSON.stringify({ paths }));
+    });
+  },
+
+  shareUpload: (token: string, bearer: string, path: string, files: File[], onProgress?: (pct: number) => void) => {
+    return new Promise<{ ok: boolean; files_uploaded: number }>((resolve, reject) => {
+      const formData = new FormData();
+      for (const file of files) {
+        formData.append('file', file, file.name);
+      }
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `/api/public/shares/${encodeURIComponent(token)}/upload?path=${encodeURIComponent(path)}`);
+      xhr.setRequestHeader('Authorization', `Bearer ${bearer}`);
+      xhr.setRequestHeader('X-NasFiles-Request', '1');
+
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable && onProgress) {
+          onProgress(Math.round((e.loaded / e.total) * 100));
+        }
+      });
+
+      xhr.addEventListener('load', () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(parseJsonResponse(xhr.responseText) as { ok: boolean; files_uploaded: number } ?? { ok: true, files_uploaded: files.length });
+        } else {
+          reject(new ApiError(xhr.status, xhr.statusText, parseJsonResponse(xhr.responseText)));
+        }
+      });
+
+      xhr.addEventListener('error', () => reject(new ApiError(0, 'Network error', null)));
+      xhr.send(formData);
     });
   },
 };
