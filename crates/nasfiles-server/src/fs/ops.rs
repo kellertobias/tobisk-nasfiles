@@ -519,18 +519,16 @@ pub async fn delete_entries(
     Ok(())
 }
 
-/// Receive an uploaded file, streaming to disk.
-/// Writes to a temp file first, then atomic-renames into place.
-pub async fn receive_upload(
-    state: &AppState,
-    user: &nasfiles_core::models::AuthUser,
-    root_key: &str,
-    dest_path: &str,
+/// Receive an uploaded file, streaming to a validated destination directory.
+///
+/// Writes to a temp file first, then atomic-renames into place. On any error
+/// after temp-file creation the temp file is removed before returning.
+pub async fn receive_upload_raw(
+    dest_dir: &Path,
     filename: &str,
     field: &mut axum::extract::multipart::Field<'_>,
     max_size: u64,
 ) -> Result<(), FileOpError> {
-    // Validate and sanitize the filename: take only the basename
     let clean_name = Path::new(filename)
         .file_name()
         .and_then(|n| n.to_str())
@@ -538,15 +536,7 @@ pub async fn receive_upload(
 
     validate_filename(clean_name)?;
 
-    let dest_dir = resolve_path(&state.config, user, root_key, dest_path)?;
-
-    if !dest_dir.is_dir() {
-        return Err(FileOpError::NotDirectory);
-    }
-
     let target = dest_dir.join(clean_name);
-
-    // Write to a temp file in the same directory, then rename (atomic on same filesystem)
     let temp_path = dest_dir.join(format!(".upload-{}-{}", uuid::Uuid::new_v4(), clean_name));
 
     let mut file = fs::File::create(&temp_path).await.map_err(|e| {
@@ -557,6 +547,7 @@ pub async fn receive_upload(
     let mut written = 0u64;
     while let Some(chunk) = field.chunk().await.map_err(|e| {
         tracing::error!("read chunk failed: {e}");
+        let _ = std::fs::remove_file(&temp_path);
         FileOpError::Io(e.to_string())
     })? {
         written += chunk.len() as u64;
@@ -566,12 +557,14 @@ pub async fn receive_upload(
         }
         file.write_all(&chunk).await.map_err(|e| {
             tracing::error!("write chunk failed: {e}");
+            let _ = std::fs::remove_file(&temp_path);
             FileOpError::Io(e.to_string())
         })?;
     }
 
     file.flush().await.map_err(|e| {
         tracing::error!("flush upload failed: {e}");
+        let _ = std::fs::remove_file(&temp_path);
         FileOpError::Io(e.to_string())
     })?;
 
@@ -583,15 +576,31 @@ pub async fn receive_upload(
         let _ = std::fs::set_permissions(&temp_path, perms);
     }
 
-    // Atomic rename
     fs::rename(&temp_path, &target).await.map_err(|e| {
         tracing::error!("rename upload failed: {e}");
-        // Clean up temp file
         let _ = std::fs::remove_file(&temp_path);
         FileOpError::Io(e.to_string())
     })?;
 
     Ok(())
+}
+
+/// Receive an uploaded file for an authenticated user, streaming to disk.
+/// Resolves and validates the destination via the user's access controls.
+pub async fn receive_upload(
+    state: &AppState,
+    user: &nasfiles_core::models::AuthUser,
+    root_key: &str,
+    dest_path: &str,
+    filename: &str,
+    field: &mut axum::extract::multipart::Field<'_>,
+    max_size: u64,
+) -> Result<(), FileOpError> {
+    let dest_dir = resolve_path(&state.config, user, root_key, dest_path)?;
+    if !dest_dir.is_dir() {
+        return Err(FileOpError::NotDirectory);
+    }
+    receive_upload_raw(&dest_dir, filename, field, max_size).await
 }
 
 // -----------------------------------------------------------------------
