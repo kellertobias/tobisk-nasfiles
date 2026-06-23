@@ -76,6 +76,14 @@ struct LiveRoot {
     root_path: PathBuf,
 }
 
+struct ScanOptions<'a> {
+    thumbnails_enabled: bool,
+    budget: usize,
+    deadline: Option<Instant>,
+    terms: Option<&'a [String]>,
+    query_norm: Option<&'a str>,
+}
+
 struct LiveScan {
     docs: Vec<(SearchDoc, i64)>,
     visited_docs: Vec<SearchDoc>,
@@ -230,19 +238,23 @@ impl SearchService {
         let scan = tokio::task::spawn_blocking(move || {
             let mut docs_by_scope = HashMap::<String, Vec<SearchDoc>>::new();
             for (root_key, root_path) in &config.common_folders {
-                let root_scope = root_key.clone();
+                let root = LiveRoot {
+                    root_key: root_key.clone(),
+                    root_scope: root_key.clone(),
+                    root_path: root_path.clone(),
+                };
                 let docs = scan_root(
-                    root_key,
-                    &root_scope,
-                    root_path,
-                    !config.no_server_side_execution,
-                    usize::MAX,
-                    None,
-                    None,
-                    None,
+                    &root,
+                    ScanOptions {
+                        thumbnails_enabled: !config.no_server_side_execution,
+                        budget: usize::MAX,
+                        deadline: None,
+                        terms: None,
+                        query_norm: None,
+                    },
                 )
                 .visited_docs;
-                docs_by_scope.insert(root_scope, docs);
+                docs_by_scope.insert(root.root_scope, docs);
             }
             docs_by_scope
         })
@@ -284,14 +296,14 @@ impl SearchService {
                 .map(|root| {
                     let scope = root.root_scope.clone();
                     let docs = scan_root(
-                        &root.root_key,
-                        &root.root_scope,
-                        &root.root_path,
-                        thumbnails_enabled,
-                        usize::MAX,
-                        None,
-                        None,
-                        None,
+                        &root,
+                        ScanOptions {
+                            thumbnails_enabled,
+                            budget: usize::MAX,
+                            deadline: None,
+                            terms: None,
+                            query_norm: None,
+                        },
                     )
                     .visited_docs;
                     (scope, docs)
@@ -333,14 +345,14 @@ impl SearchService {
                     break;
                 }
                 let scan = scan_root(
-                    &root.root_key,
-                    &root.root_scope,
-                    &root.root_path,
-                    thumbnails_enabled,
-                    remaining_budget,
-                    Some(deadline),
-                    Some(&terms),
-                    Some(&query_norm),
+                    &root,
+                    ScanOptions {
+                        thumbnails_enabled,
+                        budget: remaining_budget,
+                        deadline: Some(deadline),
+                        terms: Some(&terms),
+                        query_norm: Some(&query_norm),
+                    },
                 );
                 remaining_budget = remaining_budget.saturating_sub(scan.visited_docs.len());
                 complete &= scan.complete;
@@ -452,24 +464,19 @@ impl SearchDoc {
     }
 }
 
-fn scan_root(
-    root_key: &str,
-    root_scope: &str,
-    root_path: &Path,
-    thumbnails_enabled: bool,
-    budget: usize,
-    deadline: Option<Instant>,
-    terms: Option<&[String]>,
-    query_norm: Option<&str>,
-) -> LiveScan {
+fn scan_root(root: &LiveRoot, options: ScanOptions<'_>) -> LiveScan {
     let mut complete = true;
     let mut visited = 0usize;
     let mut matched = Vec::new();
     let mut visited_docs = Vec::new();
-    let mut pending = vec![(root_path.to_path_buf(), String::new())];
+    let mut pending = vec![(root.root_path.clone(), String::new())];
 
     while let Some((dir, parent_rel)) = pending.pop() {
-        if visited >= budget || deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        if visited >= options.budget
+            || options
+                .deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
+        {
             complete = false;
             break;
         }
@@ -479,7 +486,11 @@ fn scan_root(
         };
 
         for entry in entries.flatten() {
-            if visited >= budget || deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            if visited >= options.budget
+                || options
+                    .deadline
+                    .is_some_and(|deadline| Instant::now() >= deadline)
+            {
                 complete = false;
                 break;
             }
@@ -494,18 +505,18 @@ fn scan_root(
                 continue;
             };
             let Some(doc) = doc_from_metadata(
-                root_key,
-                root_scope,
+                &root.root_key,
+                &root.root_scope,
                 relative_path,
                 entry.path(),
                 metadata,
-                thumbnails_enabled,
+                options.thumbnails_enabled,
             ) else {
                 continue;
             };
             visited += 1;
 
-            if let (Some(terms), Some(query_norm)) = (terms, query_norm)
+            if let (Some(terms), Some(query_norm)) = (options.terms, options.query_norm)
                 && let Some(score) = score_doc(&doc, terms, query_norm)
             {
                 matched.push((doc.clone(), score));
