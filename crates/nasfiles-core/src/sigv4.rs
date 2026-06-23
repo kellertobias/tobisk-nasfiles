@@ -78,14 +78,14 @@ fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(b) =
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Ok(b) =
                 u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
-            {
-                out.push(b);
-                i += 3;
-                continue;
-            }
+        {
+            out.push(b);
+            i += 3;
+            continue;
         }
         out.push(bytes[i]);
         i += 1;
@@ -127,89 +127,71 @@ fn canonical_request_hash(
     sha256_hex(canonical_request.as_bytes())
 }
 
+/// Common parameters for both header-auth and presigned-URL SigV4 verification.
+pub struct SigV4RequestContext<'a> {
+    pub secret_key: &'a str,
+    pub method: &'a str,
+    pub path: &'a str,
+    pub raw_query: &'a str,
+    pub datetime: &'a str,
+    pub date: &'a str,
+    pub region: &'a str,
+    pub service: &'a str,
+    pub signature: &'a str,
+}
+
 /// Verify an AWS SigV4 Authorization-header signature.
 ///
-/// # Parameters
-/// - `secret_key`: plaintext S3 secret key
-/// - `method`: HTTP method (uppercase, e.g. "GET")
-/// - `path`: full URI path as seen by the server (e.g. `/s3/home/file.txt`)
-/// - `raw_query`: raw query string (without `?`)
-/// - `headers`: **all** lowercase header (name, value) pairs the client claims to have signed,
-///   in the order they appear in `SignedHeaders` (must be pre-sorted by caller)
-/// - `payload_hash`: value of `x-amz-content-sha256` header (or `"UNSIGNED-PAYLOAD"`)
-/// - `datetime`: value of `x-amz-date` header (`YYYYMMDDTHHmmssZ`)
-/// - `date`: `YYYYMMDD` extracted from `datetime`
-/// - `region`: S3 region (we use `"us-east-1"` as a fixed constant)
-/// - `service`: always `"s3"`
-/// - `signature`: hex signature from the Authorization header
+/// `headers` are the lowercase (name, value) pairs the client signed, pre-sorted.
+/// `payload_hash` is the value of `x-amz-content-sha256` (or `"UNSIGNED-PAYLOAD"`).
 pub fn verify_header_auth(
-    secret_key: &str,
-    method: &str,
-    path: &str,
-    raw_query: &str,
+    ctx: &SigV4RequestContext<'_>,
     headers: &[(String, String)],
     payload_hash: &str,
-    datetime: &str,
-    date: &str,
-    region: &str,
-    service: &str,
-    signature: &str,
 ) -> bool {
-    let canonical_uri = uri_encode(path, false);
-    let canonical_query = canonical_query_string(raw_query);
+    let canonical_uri = uri_encode(ctx.path, false);
+    let canonical_query = canonical_query_string(ctx.raw_query);
     let cr_hash = canonical_request_hash(
-        method,
+        ctx.method,
         &canonical_uri,
         &canonical_query,
         headers,
         payload_hash,
     );
 
-    let scope = format!("{date}/{region}/{service}/aws4_request");
-    let string_to_sign = format!("AWS4-HMAC-SHA256\n{datetime}\n{scope}\n{cr_hash}");
+    let scope = format!("{}/{}/{}/aws4_request", ctx.date, ctx.region, ctx.service);
+    let string_to_sign = format!("AWS4-HMAC-SHA256\n{}\n{scope}\n{cr_hash}", ctx.datetime);
 
-    let signing_key = derive_signing_key(secret_key, date, region, service);
+    let signing_key = derive_signing_key(ctx.secret_key, ctx.date, ctx.region, ctx.service);
     let expected_sig = hex::encode(hmac_sha256(&signing_key, string_to_sign.as_bytes()));
 
-    // Constant-time comparison
-    subtle_eq(expected_sig.as_bytes(), signature.as_bytes())
+    subtle_eq(expected_sig.as_bytes(), ctx.signature.as_bytes())
 }
 
 /// Verify an AWS SigV4 presigned URL signature.
 ///
-/// For presigned URLs the payload hash is always `UNSIGNED-PAYLOAD`, and the
-/// `X-Amz-Signature` query parameter is excluded from the canonical query string.
-/// The headers to sign are typically just `host`.
-pub fn verify_presigned(
-    secret_key: &str,
-    method: &str,
-    path: &str,
-    raw_query_without_sig: &str,
-    host_header: &str,
-    datetime: &str,
-    date: &str,
-    region: &str,
-    service: &str,
-    signature: &str,
-) -> bool {
-    let canonical_uri = uri_encode(path, false);
-    let canonical_query = canonical_query_string(raw_query_without_sig);
+/// For presigned URLs the payload hash is always `UNSIGNED-PAYLOAD` and the
+/// `X-Amz-Signature` query parameter must be excluded from `ctx.raw_query`.
+/// The only signed header is `host`.
+pub fn verify_presigned(ctx: &SigV4RequestContext<'_>, host_header: &str) -> bool {
+    let canonical_uri = uri_encode(ctx.path, false);
+    let canonical_query = canonical_query_string(ctx.raw_query);
     let headers = vec![("host".to_string(), host_header.to_string())];
     let cr_hash = canonical_request_hash(
-        method,
+        ctx.method,
         &canonical_uri,
         &canonical_query,
         &headers,
         "UNSIGNED-PAYLOAD",
     );
 
-    let scope = format!("{date}/{region}/{service}/aws4_request");
-    let string_to_sign = format!("AWS4-HMAC-SHA256\n{datetime}\n{scope}\n{cr_hash}");
+    let scope = format!("{}/{}/{}/aws4_request", ctx.date, ctx.region, ctx.service);
+    let string_to_sign = format!("AWS4-HMAC-SHA256\n{}\n{scope}\n{cr_hash}", ctx.datetime);
 
-    let signing_key = derive_signing_key(secret_key, date, region, service);
+    let signing_key = derive_signing_key(ctx.secret_key, ctx.date, ctx.region, ctx.service);
     let expected_sig = hex::encode(hmac_sha256(&signing_key, string_to_sign.as_bytes()));
 
-    subtle_eq(expected_sig.as_bytes(), signature.as_bytes())
+    subtle_eq(expected_sig.as_bytes(), ctx.signature.as_bytes())
 }
 
 /// Constant-time byte slice comparison to prevent timing attacks.

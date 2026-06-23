@@ -175,19 +175,18 @@ async fn verify_header_auth(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("UNSIGNED-PAYLOAD");
 
-    if !sigv4::verify_header_auth(
-        &secret_key,
-        parts.method.as_str(),
-        parts.uri.path(),
-        parts.uri.query().unwrap_or(""),
-        &signed_headers,
-        payload_hash,
+    let ctx = sigv4::SigV4RequestContext {
+        secret_key: &secret_key,
+        method: parts.method.as_str(),
+        path: parts.uri.path(),
+        raw_query: parts.uri.query().unwrap_or(""),
         datetime,
-        &date,
-        &region,
-        &service,
-        &signature,
-    ) {
+        date: &date,
+        region: &region,
+        service: &service,
+        signature: &signature,
+    };
+    if !sigv4::verify_header_auth(&ctx, &signed_headers, payload_hash) {
         return Err(S3AuthError::SignatureDoesNotMatch);
     }
 
@@ -236,18 +235,18 @@ async fn verify_presigned_auth(
         .unwrap_or("");
     let query_without_sig = rebuild_query_without_sig(&query);
 
-    if !sigv4::verify_presigned(
-        &secret_key,
-        parts.method.as_str(),
-        parts.uri.path(),
-        &query_without_sig,
-        host,
-        &datetime,
+    let ctx = sigv4::SigV4RequestContext {
+        secret_key: &secret_key,
+        method: parts.method.as_str(),
+        path: parts.uri.path(),
+        raw_query: &query_without_sig,
+        datetime: &datetime,
         date,
-        &region,
-        S3_SERVICE,
-        &signature,
-    ) {
+        region: &region,
+        service: S3_SERVICE,
+        signature: &signature,
+    };
+    if !sigv4::verify_presigned(&ctx, host) {
         return Err(S3AuthError::SignatureDoesNotMatch);
     }
 
