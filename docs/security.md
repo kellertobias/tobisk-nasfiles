@@ -81,6 +81,22 @@ a few users. Client IP is taken from `X-Forwarded-For` / `X-Real-IP`, so it is
 only meaningful when the server runs behind a trusted reverse proxy that sets
 those headers.
 
+## S3 API credential storage
+
+S3 secret keys (both personal API tokens and share credentials) are stored **plaintext** in the database. This is a deliberate trade-off: AWS Signature Version 4 (SigV4) authentication works by having the server independently compute the same HMAC-SHA256 signature as the client and compare them. That computation requires the raw secret key, so it cannot be hashed at rest the way user passwords are.
+
+**Consequence:** database read access (via a compromised `DB_URL`, a leaked backup, or direct file access to the SQLite file) exposes S3 secret keys. Protect the database with appropriate file-system permissions and ensure backups are encrypted.
+
+**Mitigations already in place:**
+- Access keys and secret keys use the same random-byte generation as share tokens (cryptographically random, URL-safe).
+- Personal API tokens record `last_used_at`, making silent credential theft visible in the profile page.
+- Users can revoke tokens from the profile page at any time; revoked tokens are rejected immediately.
+- Share credentials are short-lived (maximum one hour) and are invalidated if the underlying share is revoked.
+
+## S3 permissions are re-checked on every request
+
+Unlike file-operation jobs (which snapshot permissions at enqueue time), S3 requests re-check the authenticated user's live permissions from the database on every call. If a user's read or write access to a folder is revoked, their S3 token immediately loses access to the corresponding bucket — no need to revoke the token itself.
+
 ## Dev mode bypasses authentication
 
 When `NASFILES_DEV` is set together with a configured dev user, the auth

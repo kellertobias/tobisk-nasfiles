@@ -2613,6 +2613,7 @@ dependencies = [
  "hmac 0.12.1",
  "image",
  "libc",
+ "md5",
  "mime_guess",
  "nasfiles-core",
  "openidconnect",

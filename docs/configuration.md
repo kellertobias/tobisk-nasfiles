@@ -182,3 +182,60 @@ SFTP uses SSH public keys. Users add keys in their profile; admins can create te
 |---|---|---|
 | `MAX_UPLOAD_FILE_SIZE` | `10737418240` | Max single uploaded file, in bytes. |
 | `MAX_UPLOAD_REQUEST_SIZE` | `53687091200` | Max upload request, in bytes. |
+
+## S3-Compatible API
+
+The S3 API is always enabled and requires no additional configuration variables. It is available at `{BASE_URL}/s3` and uses AWS Signature Version 4 (SigV4) for authentication.
+
+### Endpoint details
+
+| Property | Value |
+|---|---|
+| Endpoint | `{BASE_URL}/s3` |
+| Region | `us-east-1` (hardcoded; configure this in your S3 client) |
+| Addressing style | Path-style only (`/s3/{bucket}/{key}`) |
+| Supported operations | ListBuckets, HeadBucket, ListObjectsV2, HeadObject, GetObject (with Range), PutObject, DeleteObject, CreateMultipartUpload, UploadPart, CompleteMultipartUpload, AbortMultipartUpload, ListParts |
+
+### Credential types
+
+**Personal API tokens** — users create tokens from their profile page with a chosen expiry (7 days, 30 days, 90 days, 1 year, or no expiry). The token is scoped to the creating user: each root the user can read appears as a bucket (e.g. `home`, `media`). Permissions are re-checked on every request from the live database — revoking a user's access to a folder takes effect immediately.
+
+**Share credentials** — password-protected shares expose a credential-exchange endpoint:
+
+```
+POST /api/public/shares/{share-token}/s3-credentials
+Content-Type: application/json
+
+{ "password": "optional-if-share-has-password" }
+```
+
+Response:
+```json
+{
+  "access_key": "...",
+  "secret_key": "...",
+  "expires_at": 1700000000000,
+  "endpoint": "https://your-host/s3",
+  "bucket": "share",
+  "region": "us-east-1"
+}
+```
+
+Share credentials use `share` as the single bucket name and are scoped to the share path. They expire after one hour or at the share's own expiry, whichever is sooner. Revoking the share immediately blocks further use.
+
+### rclone configuration
+
+```ini
+[nasfiles]
+type = s3
+provider = Other
+access_key_id = NASFILES...
+secret_access_key = ...
+endpoint = https://your-host/s3
+force_path_style = true
+region = us-east-1
+```
+
+Generate credentials from the profile page, or use the share credential exchange endpoint for share-scoped access. `rclone sync --checksum` works because responses include MD5-based ETags.
+
+The `MAX_UPLOAD_FILE_SIZE` limit applies to S3 PutObject. Multipart uploads have no per-part size restriction other than the final assembled file staying within that limit.

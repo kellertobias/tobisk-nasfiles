@@ -49,6 +49,7 @@ rand = { workspace = true }
 rand_10 = { package = "rand", version = "0.10" }
 hmac = { workspace = true }
 hex = "0.4"
+md5 = "0.7"
 
 # IDs / time
 uuid = { workspace = true }

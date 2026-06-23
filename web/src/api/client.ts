@@ -349,6 +349,19 @@ export interface PasskeyInfo {
   revoked_at: number | null;
 }
 
+export interface ApiToken {
+  id: string;
+  label: string;
+  access_key: string;
+  created_at: number;
+  expires_at: number | null;
+  last_used_at: number | null;
+}
+
+export interface CreatedApiToken extends ApiToken {
+  secret_key: string;
+}
+
 export interface AdminUserDetails {
   id: string;
   username: string;
@@ -519,6 +532,26 @@ export const api = {
 
   revokePasskey: (id: string) =>
     apiFetch<{ ok: boolean }>(`/api/profile/passkeys/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  // ---- API tokens ----
+
+  listApiTokens: () =>
+    apiFetch<{ tokens: ApiToken[] }>('/api/profile/api-tokens'),
+
+  createApiToken: (label: string, expires_in: number | null) =>
+    apiFetch<CreatedApiToken>('/api/profile/api-tokens', {
+      method: 'POST',
+      body: JSON.stringify({ label, expires_in }),
+    }),
+
+  renewApiToken: (id: string, extend_by: number) =>
+    apiFetch<{ ok: boolean; expires_at: number }>(`/api/profile/api-tokens/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ extend_by }),
+    }),
+
+  revokeApiToken: (id: string) =>
+    apiFetch<{ ok: boolean }>(`/api/profile/api-tokens/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   // ---- Write operations ----
 

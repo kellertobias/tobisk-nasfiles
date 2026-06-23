@@ -1,6 +1,8 @@
 pub mod admin;
 pub mod files;
 pub mod me;
+pub mod profile_tokens;
 pub mod public;
+pub mod s3;
 pub mod shares;
 pub mod thumbnails;

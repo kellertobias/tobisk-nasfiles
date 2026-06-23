@@ -98,6 +98,27 @@ we sadly do not yet offer prebuilt docker images, this will follow in a future u
 - Optional upload permission on shares
 - Share audit and admin visibility
 - Temporary SFTP guests with folder-scoped access
+- S3-compatible API for programmatic access via rclone, the AWS CLI, Cyberduck, and other S3-capable tools
+
+### S3-Compatible API
+
+Any user can create long-lived personal API tokens from their profile page and use them to access their files over an S3-compatible endpoint (`/s3/`). Each accessible root becomes a bucket (`home`, `media`, …). Writeable password-protected shares additionally expose a credential-exchange endpoint so the share password can be traded for short-lived S3 credentials scoped to the share path.
+
+Tools that work out of the box:
+
+```ini
+# rclone — rclone ls nasfiles:home/
+[nasfiles]
+type = s3
+provider = Other
+access_key_id = <your_access_key>
+secret_access_key = <your_secret_key>
+endpoint = https://your-host/s3
+force_path_style = true
+region = us-east-1
+```
+
+The S3 endpoint implements `ListBuckets`, `HeadBucket`, `ListObjectsV2`, `HeadObject`, `GetObject` (with range requests), `PutObject`, `DeleteObject`, and multipart upload (`CreateMultipartUpload`, `UploadPart`, `CompleteMultipartUpload`, `AbortMultipartUpload`, `ListParts`). Responses include MD5-based ETags, enabling `rclone sync --checksum`.
 
 ### Authentication
 

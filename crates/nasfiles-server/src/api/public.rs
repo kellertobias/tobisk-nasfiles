@@ -630,6 +630,103 @@ pub struct SharePreviewQuery {
     pub segment: Option<String>,
 }
 
+/// POST /api/public/shares/:token/s3-credentials — exchange share + optional password for S3 credentials.
+/// Returns a temporary access_key + secret_key pair usable with any S3 client.
+pub async fn share_s3_credentials(
+    State(state): State<AppState>,
+    Path(raw_token): Path<String>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<ShareAuthRequest>,
+) -> impl IntoResponse {
+    let share = match access::resolve_share(&state.pool, &raw_token).await {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+
+    let token_hash = tokens::hash_token(&raw_token);
+
+    if state.rate_limiter.is_rate_limited(&token_hash) {
+        let ip = extract_ip(&headers);
+        let ua = extract_user_agent(&headers);
+        let _ = audit::log_access(&state.pool, &share.id, ip, ua, "auth_fail", None).await;
+        return access::ShareAccessError::RateLimited.into_response();
+    }
+
+    if share.password_hash.is_some() {
+        let password = match body.password.as_deref() {
+            Some(p) if !p.is_empty() => p,
+            _ => {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "password required"})),
+                )
+                    .into_response();
+            }
+        };
+        match access::verify_password(&share, password) {
+            Ok(true) => {
+                state.rate_limiter.reset(&token_hash);
+            }
+            Ok(false) => {
+                state.rate_limiter.record_failure(&token_hash);
+                let ip = extract_ip(&headers);
+                let ua = extract_user_agent(&headers);
+                let _ = audit::log_access(&state.pool, &share.id, ip, ua, "auth_fail", None).await;
+                return (
+                    axum::http::StatusCode::UNAUTHORIZED,
+                    Json(serde_json::json!({"error": "incorrect password"})),
+                )
+                    .into_response();
+            }
+            Err(e) => return e.into_response(),
+        }
+    }
+
+    // Issue temporary S3 credentials
+    let id = uuid::Uuid::new_v4().to_string();
+    let access_key = format!("NASFILES{}", tokens::generate_share_token(12));
+    let secret_key = tokens::generate_share_token(32);
+    let now = chrono::Utc::now().timestamp_millis();
+
+    // Credentials expire at share expiry or in 1 hour, whichever is sooner
+    let one_hour = now + 3600 * 1000;
+    let expires_at = match share.expires_at {
+        Some(share_exp) if share_exp < one_hour => share_exp,
+        _ => one_hour,
+    };
+
+    if let Err(e) = sqlx::query(
+        "INSERT INTO s3_share_credentials (id, share_id, access_key, secret_key, created_at, expires_at) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind(&id)
+    .bind(&share.id)
+    .bind(&access_key)
+    .bind(&secret_key)
+    .bind(now)
+    .bind(expires_at)
+    .execute(&state.pool)
+    .await
+    {
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response();
+    }
+
+    let endpoint = format!("{}/s3", state.config.base_url.trim_end_matches('/'));
+    Json(serde_json::json!({
+        "access_key": access_key,
+        "secret_key": secret_key,
+        "expires_at": expires_at,
+        "endpoint": endpoint,
+        "bucket": "share",
+        "region": "us-east-1",
+    }))
+    .into_response()
+}
+
 fn share_preview_segment_url_prefix(uri: &Uri) -> Option<String> {
     let path_and_query = uri.path_and_query()?.as_str();
     Some(format!("{path_and_query}&segment="))

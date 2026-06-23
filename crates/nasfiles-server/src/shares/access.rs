@@ -193,6 +193,27 @@ pub async fn resolve_share_path(
     }
 }
 
+/// Resolve a share by its database ID (not the raw token).
+/// Used by the S3 credential lookup path which already knows the share_id.
+pub async fn resolve_share_by_id(pool: &AnyPool, share_id: &str) -> Result<Share, ShareAccessError> {
+    let row = sqlx::query_as::<_, ShareRow>(
+        r#"SELECT id, token_hash, owner_user_id, root_kind, root_key, relative_path,
+                  CASE WHEN is_directory THEN 1 ELSE 0 END AS is_directory,
+                  target_kind, target_user_id, password_hash,
+                  CASE WHEN allow_upload THEN 1 ELSE 0 END AS allow_upload,
+                  CASE WHEN allow_download THEN 1 ELSE 0 END AS allow_download,
+                  expires_at, created_at, revoked_at
+           FROM shares WHERE id = $1"#,
+    )
+    .bind(share_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ShareAccessError::Database(e.to_string()))?
+    .ok_or(ShareAccessError::NotFound)?;
+
+    row.into_share()
+}
+
 // -----------------------------------------------------------------------
 // Internal query helper
 // -----------------------------------------------------------------------

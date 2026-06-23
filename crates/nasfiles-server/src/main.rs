@@ -228,6 +228,20 @@ async fn main() -> anyhow::Result<()> {
             "/admin/users/{user_id}/trusted-devices/{device_id}",
             axum::routing::delete(auth::local::admin_revoke_trusted_device),
         )
+        // API token management
+        .route("/profile/api-tokens", get(api::profile_tokens::list_tokens))
+        .route(
+            "/profile/api-tokens",
+            post(api::profile_tokens::create_token),
+        )
+        .route(
+            "/profile/api-tokens/{id}",
+            axum::routing::patch(api::profile_tokens::renew_token),
+        )
+        .route(
+            "/profile/api-tokens/{id}",
+            axum::routing::delete(api::profile_tokens::revoke_token),
+        )
         // Local-auth profile routes
         .route("/profile/password", post(auth::local::change_password))
         .route("/profile/totp/setup", post(auth::local::start_totp_setup))
@@ -301,6 +315,10 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let public_routes = Router::new()
+        .route(
+            "/shares/{token}/s3-credentials",
+            post(api::public::share_s3_credentials),
+        )
         .route("/shares/{token}", get(api::public::share_metadata))
         .route("/shares/{token}/auth", post(api::public::share_auth))
         .route("/shares/{token}/list", get(api::public::share_list))
@@ -319,11 +337,27 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(|| async { "ok" }))
         .route("/api/auth/config", get(auth::local::auth_config));
 
+    // S3-compatible API — no session or CSRF middleware, uses SigV4
+    let s3_router = api::s3::router();
+
+    // Spawn background cleanup for abandoned multipart uploads (every hour)
+    {
+        let state_clone = state.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            loop {
+                interval.tick().await;
+                api::s3::multipart::cleanup_abandoned(state_clone.clone()).await;
+            }
+        });
+    }
+
     // Main application router
     let app = Router::new()
         .nest("/api", api_routes)
         .nest("/auth", auth_routes)
         .nest("/api/public", public_routes)
+        .nest("/s3", s3_router)
         .merge(health)
         .fallback(assets::static_handler)
         .layer(session_layer)

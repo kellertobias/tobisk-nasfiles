@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
-import api from "../api/client";
+import api, { type CreatedApiToken } from "../api/client";
 import { Icon } from "../components/Icon";
 import { TopBar } from "../components/TopBar";
 import { qrSvgDataUrl } from "../lib/qr";
@@ -23,6 +23,11 @@ function ProfilePage() {
 	const [totpCode, setTotpCode] = useState("");
 	const [totpModalOpen, setTotpModalOpen] = useState(false);
 	const [localError, setLocalError] = useState("");
+	// API token state
+	const [tokenModalOpen, setTokenModalOpen] = useState(false);
+	const [tokenLabel, setTokenLabel] = useState("");
+	const [tokenExpiry, setTokenExpiry] = useState("30d");
+	const [createdToken, setCreatedToken] = useState<CreatedApiToken | null>(null);
 
 	const { data: user } = useQuery({
 		queryKey: ["me"],
@@ -45,6 +50,11 @@ function ProfilePage() {
 		queryKey: ["trusted-devices"],
 		queryFn: api.listTrustedDevices,
 		enabled: user?.auth.totp_enabled === true,
+		staleTime: 10_000,
+	});
+	const { data: tokenData } = useQuery({
+		queryKey: ["api-tokens"],
+		queryFn: api.listApiTokens,
 		staleTime: 10_000,
 	});
 
@@ -121,9 +131,38 @@ function ProfilePage() {
 		},
 	});
 
+	const expiryOptions: { label: string; value: string; seconds: number | null }[] = [
+		{ label: "7 days", value: "7d", seconds: 7 * 86400 },
+		{ label: "30 days", value: "30d", seconds: 30 * 86400 },
+		{ label: "90 days", value: "90d", seconds: 90 * 86400 },
+		{ label: "1 year", value: "1y", seconds: 365 * 86400 },
+		{ label: "No expiry", value: "never", seconds: null },
+	];
+	const selectedExpiry = expiryOptions.find((o) => o.value === tokenExpiry) ?? expiryOptions[1];
+
+	const createTokenMutation = useMutation({
+		mutationFn: () => api.createApiToken(tokenLabel.trim(), selectedExpiry.seconds),
+		onSuccess: (created) => {
+			setTokenModalOpen(false);
+			setTokenLabel("");
+			setTokenExpiry("30d");
+			setCreatedToken(created);
+			queryClient.invalidateQueries({ queryKey: ["api-tokens"] });
+		},
+	});
+	const revokeTokenMutation = useMutation({
+		mutationFn: api.revokeApiToken,
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: ["api-tokens"] }),
+	});
+	const renewTokenMutation = useMutation({
+		mutationFn: (id: string) => api.renewApiToken(id, 30 * 86400),
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: ["api-tokens"] }),
+	});
+
 	const keys = data?.keys ?? [];
 	const passkeys = passkeyData?.passkeys ?? [];
 	const trustedDevices = trustedData?.devices ?? [];
+	const apiTokens = tokenData?.tokens ?? [];
 	const totpQrUrl = totpSetup ? qrSvgDataUrl(totpSetup.url) : "";
 
 	return (
@@ -382,14 +421,176 @@ function ProfilePage() {
 							</table>
 						)}
 					</section>
+
+					<section style={{ marginBottom: "var(--space-6)" }}>
+						<div style={sectionRowStyle}>
+							<h2 style={{ ...sectionTitleStyle, margin: 0 }}>S3 API tokens</h2>
+							<button type="button" onClick={() => setTokenModalOpen(true)} style={buttonStyle}>
+								<Icon name="upload" size={16} />
+								Create token
+							</button>
+						</div>
+						<p style={{ fontSize: "var(--text-sm)", color: "var(--color-fg-muted)", margin: "0 0 var(--space-3)" }}>
+							Use these credentials with rclone, the AWS CLI, or any S3-compatible tool to access your files programmatically.
+						</p>
+						{apiTokens.length === 0 ? (
+							<EmptyMessage text="No API tokens" />
+						) : (
+							<table style={tableStyle}>
+								<thead>
+									<tr>
+										<th style={thStyle}>Label</th>
+										<th style={thStyle}>Access key</th>
+										<th style={thStyle}>Created</th>
+										<th style={thStyle}>Last used</th>
+										<th style={thStyle}>Expires</th>
+										<th style={thStyle}></th>
+									</tr>
+								</thead>
+								<tbody>
+									{apiTokens.map((token) => {
+										const expired = token.expires_at !== null && token.expires_at < Date.now();
+										return (
+											<tr key={token.id}>
+												<td style={tdStyle}>{token.label}</td>
+												<td style={tdStyle}><code style={{ fontSize: "var(--text-xs)" }}>{token.access_key.slice(0, 12)}…</code></td>
+												<td style={tdStyle}>{new Date(token.created_at).toLocaleDateString()}</td>
+												<td style={tdStyle}>{token.last_used_at ? new Date(token.last_used_at).toLocaleDateString() : "Never"}</td>
+												<td style={{ ...tdStyle, color: expired ? "var(--color-danger)" : token.expires_at ? "var(--color-fg)" : "var(--color-fg-muted)" }}>
+													{token.expires_at ? new Date(token.expires_at).toLocaleDateString() : "Never"}
+												</td>
+												<td style={{ ...tdStyle, display: "flex", gap: "var(--space-1)", flexWrap: "wrap" }}>
+													<button type="button" onClick={() => renewTokenMutation.mutate(token.id)} disabled={renewTokenMutation.isPending} style={buttonStyle}>
+														+30d
+													</button>
+													<button type="button" onClick={() => revokeTokenMutation.mutate(token.id)} style={{ ...buttonStyle, color: "var(--color-danger)" }}>
+														<Icon name="x" size={16} />
+														Revoke
+													</button>
+												</td>
+											</tr>
+										);
+									})}
+								</tbody>
+							</table>
+						)}
+					</section>
 				</div>
 			</main>
+
+			{tokenModalOpen && (
+				<Modal title="Create API token" onClose={() => { setTokenModalOpen(false); setTokenLabel(""); }}>
+					<div style={{ display: "grid", gap: "var(--space-3)" }}>
+						<input
+							value={tokenLabel}
+							onChange={(e) => setTokenLabel(e.target.value)}
+							placeholder="Token label (e.g. rclone home server)"
+							style={inputStyle}
+							autoFocus
+						/>
+						<select
+							value={tokenExpiry}
+							onChange={(e) => setTokenExpiry(e.target.value)}
+							style={inputStyle}
+						>
+							{expiryOptions.map((o) => (
+								<option key={o.value} value={o.value}>{o.label}</option>
+							))}
+						</select>
+						{createTokenMutation.error && (
+							<span style={{ color: "var(--color-danger)", fontSize: "var(--text-sm)" }}>
+								{createTokenMutation.error instanceof Error ? createTokenMutation.error.message : String(createTokenMutation.error)}
+							</span>
+						)}
+						<div style={modalActionsStyle}>
+							<button type="button" onClick={() => { setTokenModalOpen(false); setTokenLabel(""); }} style={buttonStyle}>Cancel</button>
+							<button
+								type="button"
+								disabled={!tokenLabel.trim() || createTokenMutation.isPending}
+								onClick={() => createTokenMutation.mutate()}
+								style={{ ...buttonStyle, background: "var(--color-accent)", borderColor: "var(--color-accent)", color: "var(--color-accent-fg)" }}
+							>
+								Create
+							</button>
+						</div>
+					</div>
+				</Modal>
+			)}
+
+			{createdToken && (
+				<Modal title="Save your secret key" onClose={() => setCreatedToken(null)}>
+					<div style={{ display: "grid", gap: "var(--space-4)" }}>
+						<p style={{ fontSize: "var(--text-sm)", color: "var(--color-fg-muted)", margin: 0 }}>
+							The secret key is shown only once. Copy it now and store it somewhere safe.
+						</p>
+						<div style={{ display: "grid", gap: "var(--space-2)" }}>
+							<label style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--color-fg-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Access key</label>
+							<CopyField value={createdToken.access_key} />
+						</div>
+						<div style={{ display: "grid", gap: "var(--space-2)" }}>
+							<label style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--color-fg-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Secret key</label>
+							<CopyField value={createdToken.secret_key} />
+						</div>
+						<details style={{ fontSize: "var(--text-sm)" }}>
+							<summary style={{ cursor: "pointer", fontWeight: 500, marginBottom: "var(--space-2)" }}>rclone configuration</summary>
+							<pre style={{
+								background: "var(--color-bg-muted)",
+								border: "1px solid var(--color-border)",
+								borderRadius: "var(--radius-md)",
+								padding: "var(--space-3)",
+								fontSize: "var(--text-xs)",
+								overflowX: "auto",
+								margin: 0,
+							}}>{[
+								`[nasfiles]`,
+								`type = s3`,
+								`provider = Other`,
+								`access_key_id = ${createdToken.access_key}`,
+								`secret_access_key = ${createdToken.secret_key}`,
+								`endpoint = ${window.location.origin}/s3`,
+								`force_path_style = true`,
+								`region = us-east-1`,
+							].join("\n")}</pre>
+						</details>
+						<div style={modalActionsStyle}>
+							<button type="button" onClick={() => setCreatedToken(null)} style={{ ...buttonStyle, background: "var(--color-accent)", borderColor: "var(--color-accent)", color: "var(--color-accent-fg)" }}>
+								Done
+							</button>
+						</div>
+					</div>
+				</Modal>
+			)}
 		</div>
 	);
 }
 
 function EmptyMessage({ text }: { text: string }) {
 	return <div style={{ padding: "var(--space-8)", textAlign: "center", color: "var(--color-fg-muted)", fontSize: "var(--text-sm)" }}>{text}</div>;
+}
+
+function CopyField({ value }: { value: string }) {
+	const [copied, setCopied] = useState(false);
+	return (
+		<div style={{ display: "flex", gap: "var(--space-2)", alignItems: "center" }}>
+			<code style={{
+				flex: 1,
+				padding: "var(--space-2) var(--space-3)",
+				background: "var(--color-bg-muted)",
+				border: "1px solid var(--color-border)",
+				borderRadius: "var(--radius-md)",
+				fontSize: "var(--text-xs)",
+				overflowWrap: "anywhere",
+				userSelect: "all",
+			}}>{value}</code>
+			<button
+				type="button"
+				onClick={() => { void navigator.clipboard.writeText(value).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); }}
+				style={buttonStyle}
+			>
+				{copied ? <Icon name="check" size={16} /> : <Icon name="copy" size={16} />}
+			</button>
+		</div>
+	);
 }
 
 function Modal({
