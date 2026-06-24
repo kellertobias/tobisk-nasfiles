@@ -13,6 +13,7 @@ mod thumb;
 
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     http::{HeaderName, HeaderValue, Method, header},
     middleware,
     routing::{get, post},
@@ -131,6 +132,8 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    let upload_body_limit = upload_body_limit(&state.config);
+
     // Authenticated API routes
     let api_routes = Router::new()
         .route("/me", get(api::me::me))
@@ -173,7 +176,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/files/{root}/move", post(api::files::move_entries))
         .route("/files/{root}/transfer", post(api::files::transfer_entries))
         .route("/files/{root}/delete", post(api::files::delete_entries))
-        .route("/files/{root}/upload", post(api::files::upload_file))
+        .route(
+            "/files/{root}/upload",
+            post(api::files::upload_file).layer(upload_body_limit),
+        )
         .route("/files/{root}/extract", post(api::files::extract_archive))
         .route("/files/{root}/zip", post(api::files::download_zip))
         // Share management
@@ -324,7 +330,10 @@ async fn main() -> anyhow::Result<()> {
             "/shares/{token}/preview-status",
             get(api::public::share_preview_status),
         )
-        .route("/shares/{token}/upload", post(api::public::share_upload))
+        .route(
+            "/shares/{token}/upload",
+            post(api::public::share_upload).layer(upload_body_limit),
+        )
         .route("/shares/{token}/zip", post(api::public::share_zip));
 
     // Health check
@@ -412,6 +421,11 @@ fn cors_layer(config: &config::AppConfig) -> anyhow::Result<CorsLayer> {
             header::CONTENT_TYPE,
             HeaderName::from_static("x-nasfiles-request"),
         ]))
+}
+
+fn upload_body_limit(config: &config::AppConfig) -> DefaultBodyLimit {
+    let limit = usize::try_from(config.max_upload_request_size).unwrap_or(usize::MAX);
+    DefaultBodyLimit::max(limit)
 }
 
 fn origin_from_url(url: &str) -> Option<String> {

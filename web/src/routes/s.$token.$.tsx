@@ -251,6 +251,50 @@ function ShareViewer() {
     [uploadItems],
   );
 
+  const handleDragEnter = useCallback(
+    (e: React.DragEvent) => {
+      if (!meta?.allow_upload) return;
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounterRef.current++;
+      if (e.dataTransfer.types.includes("Files")) setIsDraggingFiles(true);
+    },
+    [meta?.allow_upload],
+  );
+
+  const handleDragLeave = useCallback(
+    (e: React.DragEvent) => {
+      if (!meta?.allow_upload) return;
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+      if (dragCounterRef.current === 0) setIsDraggingFiles(false);
+    },
+    [meta?.allow_upload],
+  );
+
+  const handleDragOver = useCallback(
+    (e: React.DragEvent) => {
+      if (!meta?.allow_upload) return;
+      e.preventDefault();
+      e.stopPropagation();
+    },
+    [meta?.allow_upload],
+  );
+
+  const handleDrop = useCallback(
+    async (e: React.DragEvent) => {
+      if (!meta?.allow_upload) return;
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounterRef.current = 0;
+      setIsDraggingFiles(false);
+      const files = Array.from(e.dataTransfer.files);
+      if (files.length > 0) await handleShareUpload(files);
+    },
+    [meta?.allow_upload, handleShareUpload],
+  );
+
   const previewDialog =
     previewTarget && bearer ? (
       <ShareMediaPreviewDialog
@@ -488,50 +532,6 @@ function ShareViewer() {
       </div>
     );
   }
-
-  const handleDragEnter = useCallback(
-    (e: React.DragEvent) => {
-      if (!meta?.allow_upload) return;
-      e.preventDefault();
-      e.stopPropagation();
-      dragCounterRef.current++;
-      if (e.dataTransfer.types.includes("Files")) setIsDraggingFiles(true);
-    },
-    [meta?.allow_upload],
-  );
-
-  const handleDragLeave = useCallback(
-    (e: React.DragEvent) => {
-      if (!meta?.allow_upload) return;
-      e.preventDefault();
-      e.stopPropagation();
-      dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
-      if (dragCounterRef.current === 0) setIsDraggingFiles(false);
-    },
-    [meta?.allow_upload],
-  );
-
-  const handleDragOver = useCallback(
-    (e: React.DragEvent) => {
-      if (!meta?.allow_upload) return;
-      e.preventDefault();
-      e.stopPropagation();
-    },
-    [meta?.allow_upload],
-  );
-
-  const handleDrop = useCallback(
-    async (e: React.DragEvent) => {
-      if (!meta?.allow_upload) return;
-      e.preventDefault();
-      e.stopPropagation();
-      dragCounterRef.current = 0;
-      setIsDraggingFiles(false);
-      const files = Array.from(e.dataTransfer.files);
-      if (files.length > 0) await handleShareUpload(files);
-    },
-    [meta?.allow_upload, handleShareUpload],
-  );
 
   // Directory listing
   return (

@@ -182,6 +182,20 @@ pub enum RootError {
     Internal,
 }
 
+impl axum::response::IntoResponse for RootError {
+    fn into_response(self) -> axum::response::Response {
+        let (status, msg) = match self {
+            RootError::NotFound => (axum::http::StatusCode::NOT_FOUND, "root not found"),
+            RootError::Forbidden => (axum::http::StatusCode::FORBIDDEN, "access denied"),
+            RootError::Internal => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "internal error",
+            ),
+        };
+        (status, axum::Json(serde_json::json!({"error": msg}))).into_response()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,19 +263,5 @@ mod tests {
         let after: Vec<&str> = roots.iter().map(|r| r.key.as_str()).collect();
         assert_eq!(before, after);
         assert!(roots.iter().all(|r| r.group.is_none()));
-    }
-}
-
-impl axum::response::IntoResponse for RootError {
-    fn into_response(self) -> axum::response::Response {
-        let (status, msg) = match self {
-            RootError::NotFound => (axum::http::StatusCode::NOT_FOUND, "root not found"),
-            RootError::Forbidden => (axum::http::StatusCode::FORBIDDEN, "access denied"),
-            RootError::Internal => (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "internal error",
-            ),
-        };
-        (status, axum::Json(serde_json::json!({"error": msg}))).into_response()
     }
 }
