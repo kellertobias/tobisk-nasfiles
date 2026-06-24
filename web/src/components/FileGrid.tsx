@@ -8,6 +8,7 @@ import { FileIcon } from "./Icon";
 import { ThumbnailImage } from "./ThumbnailImage";
 import {
   entryPath,
+  hasExternalFileDrag,
   hasNasfilesDrag,
   isDemoDraggedPath,
   isDemoDragHoverPath,
@@ -295,7 +296,10 @@ export function FileGrid({
                     !entry.is_dir ||
                     !root ||
                     !onDropFiles ||
-                    !hasNasfilesDrag(e.dataTransfer)
+                    !(
+                      hasNasfilesDrag(e.dataTransfer) ||
+                      hasExternalFileDrag(e.dataTransfer)
+                    )
                   )
                     return;
                   e.preventDefault();
@@ -307,13 +311,19 @@ export function FileGrid({
                     !entry.is_dir ||
                     !root ||
                     !onDropFiles ||
-                    !hasNasfilesDrag(e.dataTransfer)
+                    !(
+                      hasNasfilesDrag(e.dataTransfer) ||
+                      hasExternalFileDrag(e.dataTransfer)
+                    )
                   )
                     return;
                   e.preventDefault();
                   e.stopPropagation();
                   e.dataTransfer.dropEffect =
-                    e.dataTransfer.effectAllowed === "copy" ? "copy" : "move";
+                    hasExternalFileDrag(e.dataTransfer) ||
+                    e.dataTransfer.effectAllowed === "copy"
+                      ? "copy"
+                      : "move";
                 }}
                 onDragLeave={(e) => {
                   if (e.currentTarget.contains(e.relatedTarget as Node | null))
@@ -325,7 +335,10 @@ export function FileGrid({
                     !entry.is_dir ||
                     !root ||
                     !onDropFiles ||
-                    !hasNasfilesDrag(e.dataTransfer)
+                    !(
+                      hasNasfilesDrag(e.dataTransfer) ||
+                      hasExternalFileDrag(e.dataTransfer)
+                    )
                   )
                     return;
                   e.preventDefault();

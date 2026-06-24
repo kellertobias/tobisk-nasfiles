@@ -32,6 +32,17 @@ export function hasNasfilesDrag(dataTransfer: DataTransfer) {
   return Array.from(dataTransfer.types).includes(NASFILES_DRAG_TYPE);
 }
 
+export function hasExternalFileDrag(dataTransfer: DataTransfer) {
+  return (
+    Array.from(dataTransfer.types).includes("Files") ||
+    Array.from(dataTransfer.items).some((item) => item.kind === "file")
+  );
+}
+
+export function getExternalDropFiles(dataTransfer: DataTransfer) {
+  return Array.from(dataTransfer.files).filter((file) => file.name);
+}
+
 function basename(path: string) {
   const idx = path.lastIndexOf("/");
   return idx === -1 ? path : path.slice(idx + 1);

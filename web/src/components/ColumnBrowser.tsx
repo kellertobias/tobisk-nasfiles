@@ -21,6 +21,7 @@ import { UsageRing } from "./UsageRing";
 import { FileDetailsPane } from "./FileDetailsPane";
 import {
   entryPath,
+  hasExternalFileDrag,
   hasNasfilesDrag,
   setFileDragPayload,
 } from "../lib/fileDrag";
@@ -788,22 +789,37 @@ function FolderColumnView({
       ref={refCallback}
       aria-label={column.title}
       onDragEnter={(e) => {
-        if (!canDrop || !hasNasfilesDrag(e.dataTransfer)) return;
+        if (
+          !canDrop ||
+          !(hasNasfilesDrag(e.dataTransfer) || hasExternalFileDrag(e.dataTransfer))
+        )
+          return;
         e.preventDefault();
         setIsDropTarget(true);
       }}
       onDragOver={(e) => {
-        if (!canDrop || !hasNasfilesDrag(e.dataTransfer)) return;
+        if (
+          !canDrop ||
+          !(hasNasfilesDrag(e.dataTransfer) || hasExternalFileDrag(e.dataTransfer))
+        )
+          return;
         e.preventDefault();
         e.dataTransfer.dropEffect =
-          e.dataTransfer.effectAllowed === "copy" ? "copy" : "move";
+          hasExternalFileDrag(e.dataTransfer) ||
+          e.dataTransfer.effectAllowed === "copy"
+            ? "copy"
+            : "move";
       }}
       onDragLeave={(e) => {
         if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
         resetDropTarget();
       }}
       onDrop={(e) => {
-        if (!canDrop || !hasNasfilesDrag(e.dataTransfer)) return;
+        if (
+          !canDrop ||
+          !(hasNasfilesDrag(e.dataTransfer) || hasExternalFileDrag(e.dataTransfer))
+        )
+          return;
         e.preventDefault();
         e.stopPropagation();
         resetDropTarget();
@@ -1123,26 +1139,41 @@ function ColumnEntryRow({
       }}
       onDragEnd={resetDropTarget}
       onDragEnter={(e) => {
-        if (!entry.is_dir || !canDrop || !hasNasfilesDrag(e.dataTransfer))
+        if (
+          !entry.is_dir ||
+          !canDrop ||
+          !(hasNasfilesDrag(e.dataTransfer) || hasExternalFileDrag(e.dataTransfer))
+        )
           return;
         e.preventDefault();
         e.stopPropagation();
         setIsDropTarget(true);
       }}
       onDragOver={(e) => {
-        if (!entry.is_dir || !canDrop || !hasNasfilesDrag(e.dataTransfer))
+        if (
+          !entry.is_dir ||
+          !canDrop ||
+          !(hasNasfilesDrag(e.dataTransfer) || hasExternalFileDrag(e.dataTransfer))
+        )
           return;
         e.preventDefault();
         e.stopPropagation();
         e.dataTransfer.dropEffect =
-          e.dataTransfer.effectAllowed === "copy" ? "copy" : "move";
+          hasExternalFileDrag(e.dataTransfer) ||
+          e.dataTransfer.effectAllowed === "copy"
+            ? "copy"
+            : "move";
       }}
       onDragLeave={(e) => {
         if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
         resetDropTarget();
       }}
       onDrop={(e) => {
-        if (!entry.is_dir || !canDrop || !hasNasfilesDrag(e.dataTransfer))
+        if (
+          !entry.is_dir ||
+          !canDrop ||
+          !(hasNasfilesDrag(e.dataTransfer) || hasExternalFileDrag(e.dataTransfer))
+        )
           return;
         e.preventDefault();
         e.stopPropagation();

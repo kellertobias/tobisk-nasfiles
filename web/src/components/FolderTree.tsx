@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Icon } from "./Icon";
 import { ICONS } from "../lib/icons";
 import {
+  hasExternalFileDrag,
   hasNasfilesDrag,
   isDemoDraggedPath,
   isDemoDropTarget,
@@ -295,7 +296,10 @@ function TreeRoot({
           if (
             !root.caps.write ||
             !onDropFiles ||
-            !hasNasfilesDrag(e.dataTransfer)
+            !(
+              hasNasfilesDrag(e.dataTransfer) ||
+              hasExternalFileDrag(e.dataTransfer)
+            )
           )
             return;
           e.preventDefault();
@@ -307,13 +311,19 @@ function TreeRoot({
           if (
             !root.caps.write ||
             !onDropFiles ||
-            !hasNasfilesDrag(e.dataTransfer)
+            !(
+              hasNasfilesDrag(e.dataTransfer) ||
+              hasExternalFileDrag(e.dataTransfer)
+            )
           )
             return;
           e.preventDefault();
           e.stopPropagation();
           e.dataTransfer.dropEffect =
-            e.dataTransfer.effectAllowed === "copy" ? "copy" : "move";
+            hasExternalFileDrag(e.dataTransfer) ||
+            e.dataTransfer.effectAllowed === "copy"
+              ? "copy"
+              : "move";
         }}
         onDragLeave={(e) => {
           if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
@@ -323,7 +333,10 @@ function TreeRoot({
           if (
             !root.caps.write ||
             !onDropFiles ||
-            !hasNasfilesDrag(e.dataTransfer)
+            !(
+              hasNasfilesDrag(e.dataTransfer) ||
+              hasExternalFileDrag(e.dataTransfer)
+            )
           )
             return;
           e.preventDefault();
@@ -614,25 +627,40 @@ function TreeNode({
       <button
         onClick={handleClick}
         onDragEnter={(e) => {
-          if (!onDropFiles || !hasNasfilesDrag(e.dataTransfer)) return;
+          if (
+            !onDropFiles ||
+            !(hasNasfilesDrag(e.dataTransfer) || hasExternalFileDrag(e.dataTransfer))
+          )
+            return;
           e.preventDefault();
           e.stopPropagation();
           setExpanded(true);
           setIsDropTarget(true);
         }}
         onDragOver={(e) => {
-          if (!onDropFiles || !hasNasfilesDrag(e.dataTransfer)) return;
+          if (
+            !onDropFiles ||
+            !(hasNasfilesDrag(e.dataTransfer) || hasExternalFileDrag(e.dataTransfer))
+          )
+            return;
           e.preventDefault();
           e.stopPropagation();
           e.dataTransfer.dropEffect =
-            e.dataTransfer.effectAllowed === "copy" ? "copy" : "move";
+            hasExternalFileDrag(e.dataTransfer) ||
+            e.dataTransfer.effectAllowed === "copy"
+              ? "copy"
+              : "move";
         }}
         onDragLeave={(e) => {
           if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
           resetDropTarget();
         }}
         onDrop={(e) => {
-          if (!onDropFiles || !hasNasfilesDrag(e.dataTransfer)) return;
+          if (
+            !onDropFiles ||
+            !(hasNasfilesDrag(e.dataTransfer) || hasExternalFileDrag(e.dataTransfer))
+          )
+            return;
           e.preventDefault();
           e.stopPropagation();
           resetDropTarget();

@@ -8,14 +8,18 @@ import {
 } from "react";
 import api from "../api/client";
 import { Icon } from "./Icon";
-import { hasNasfilesDrag } from "../lib/fileDrag";
+import {
+  getExternalDropFiles,
+  hasExternalFileDrag,
+  hasNasfilesDrag,
+} from "../lib/fileDrag";
 import { useGlobalDragCleanup } from "../lib/dragState";
 
 interface UploadZoneProps {
   root: string;
   path: string;
   children: React.ReactNode;
-  onUploadComplete: () => void;
+  onUploadComplete: (targetRoot: string, targetPath: string) => void;
   canUpload?: boolean;
 }
 
@@ -29,6 +33,7 @@ interface UploadItem {
 
 export interface UploadZoneHandle {
   trigger: () => void;
+  uploadTo: (targetRoot: string, targetPath: string, files: File[]) => void;
 }
 
 export const UploadZone = forwardRef<UploadZoneHandle, UploadZoneProps>(
@@ -39,14 +44,6 @@ export const UploadZone = forwardRef<UploadZoneHandle, UploadZoneProps>(
     const dragCounter = useRef(0);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-    useImperativeHandle(
-      ref,
-      () => ({
-        trigger: () => fileInputRef.current?.click(),
-      }),
-      [],
-    );
 
     const resetDragState = useCallback(() => {
       dragCounter.current = 0;
@@ -70,12 +67,11 @@ export const UploadZone = forwardRef<UploadZoneHandle, UploadZoneProps>(
       (e: React.DragEvent) => {
         if (!canUpload) return;
         if (hasNasfilesDrag(e.dataTransfer)) return;
+        if (!hasExternalFileDrag(e.dataTransfer)) return;
         e.preventDefault();
         e.stopPropagation();
         dragCounter.current++;
-        if (e.dataTransfer.types.includes("Files")) {
-          setIsDragging(true);
-        }
+        setIsDragging(true);
       },
       [canUpload],
     );
@@ -84,6 +80,7 @@ export const UploadZone = forwardRef<UploadZoneHandle, UploadZoneProps>(
       (e: React.DragEvent) => {
         if (!canUpload) return;
         if (hasNasfilesDrag(e.dataTransfer)) return;
+        if (!hasExternalFileDrag(e.dataTransfer)) return;
         e.preventDefault();
         e.stopPropagation();
         dragCounter.current = Math.max(0, dragCounter.current - 1);
@@ -98,14 +95,16 @@ export const UploadZone = forwardRef<UploadZoneHandle, UploadZoneProps>(
       (e: React.DragEvent) => {
         if (!canUpload) return;
         if (hasNasfilesDrag(e.dataTransfer)) return;
+        if (!hasExternalFileDrag(e.dataTransfer)) return;
         e.preventDefault();
         e.stopPropagation();
+        e.dataTransfer.dropEffect = "copy";
       },
       [canUpload],
     );
 
     const uploadFiles = useCallback(
-      async (files: File[]) => {
+      async (files: File[], targetRoot = root, targetPath = path) => {
         if (files.length === 0) return;
 
         // Cancel any pending auto-hide from a previous batch.
@@ -136,7 +135,7 @@ export const UploadZone = forwardRef<UploadZoneHandle, UploadZoneProps>(
                 ),
               );
               try {
-                await api.upload(root, path, [item.file], (pct) => {
+                await api.upload(targetRoot, targetPath, [item.file], (pct) => {
                   setUploads((prev) =>
                     prev.map((u) =>
                       u.id === item.id ? { ...u, progress: pct } : u,
@@ -164,7 +163,7 @@ export const UploadZone = forwardRef<UploadZoneHandle, UploadZoneProps>(
           );
         }
 
-        onUploadComplete();
+        onUploadComplete(targetRoot, targetPath);
         hideTimerRef.current = setTimeout(() => {
           setShowProgress(false);
           setUploads([]);
@@ -174,14 +173,26 @@ export const UploadZone = forwardRef<UploadZoneHandle, UploadZoneProps>(
       [root, path, onUploadComplete],
     );
 
+    useImperativeHandle(
+      ref,
+      () => ({
+        trigger: () => fileInputRef.current?.click(),
+        uploadTo: (targetRoot, targetPath, files) => {
+          void uploadFiles(files, targetRoot, targetPath);
+        },
+      }),
+      [uploadFiles],
+    );
+
     const handleDrop = useCallback(
       async (e: React.DragEvent) => {
         if (!canUpload) return;
         if (hasNasfilesDrag(e.dataTransfer)) return;
+        if (!hasExternalFileDrag(e.dataTransfer)) return;
         e.preventDefault();
         e.stopPropagation();
         resetDragState();
-        const files = Array.from(e.dataTransfer.files);
+        const files = getExternalDropFiles(e.dataTransfer);
         await uploadFiles(files);
       },
       [canUpload, resetDragState, uploadFiles],

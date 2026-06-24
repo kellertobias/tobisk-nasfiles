@@ -32,7 +32,9 @@ import { ErrorDialog, ErrorToasts } from "../components/ErrorNotice";
 import type { ErrorNoticeData } from "../components/ErrorNotice";
 import { useViewStore } from "../state/view";
 import {
+  getExternalDropFiles,
   getFileDragPayload,
+  hasExternalFileDrag,
   hasNasfilesDrag,
   isDemoDropTarget,
   isSelfOrDescendantDrop,
@@ -292,10 +294,15 @@ function FileBrowser() {
     useViewStore.getState().clearSelection();
   }, [path, root]);
 
-  const refreshListing = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ["listing", root, path] });
-    queryClient.invalidateQueries({ queryKey: ["tree", root] });
-  }, [queryClient, root, path]);
+  const refreshListing = useCallback(
+    (targetRoot = root, targetPath = path) => {
+      queryClient.invalidateQueries({
+        queryKey: ["listing", targetRoot, targetPath],
+      });
+      queryClient.invalidateQueries({ queryKey: ["tree", targetRoot] });
+    },
+    [queryClient, root, path],
+  );
 
   const togglePreviewAtPath = useCallback(
     (entry: FileEntry, parentPath: string) => {
@@ -522,10 +529,9 @@ function FileBrowser() {
 
   const handleFileDrop = useCallback(
     (targetRoot: string, targetPath: string, e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
       resetCurrentDropTarget();
-
-      const payload = getFileDragPayload(e.dataTransfer);
-      if (!payload || payload.paths.length === 0) return;
 
       const targetRootInfo = user?.roots.find((r) => r.key === targetRoot);
       if (!targetRootInfo?.caps.write) {
@@ -535,6 +541,15 @@ function FileBrowser() {
         );
         return;
       }
+
+      const externalFiles = getExternalDropFiles(e.dataTransfer);
+      if (externalFiles.length > 0) {
+        uploadZoneRef.current?.uploadTo(targetRoot, targetPath, externalFiles);
+        return;
+      }
+
+      const payload = getFileDragPayload(e.dataTransfer);
+      if (!payload || payload.paths.length === 0) return;
 
       if (isSelfOrDescendantDrop(payload, targetRoot, targetPath)) {
         showErrorToast("Drop blocked", "Cannot move a folder into itself.");
@@ -1126,14 +1141,32 @@ function FileBrowser() {
                     : "flex flex-col-reverse lg:flex-row gap-6 items-start"
                 }
                 onDragEnter={(e) => {
-                  if (!caps.write || !hasNasfilesDrag(e.dataTransfer)) return;
+                  if (
+                    !caps.write ||
+                    !(
+                      hasNasfilesDrag(e.dataTransfer) ||
+                      hasExternalFileDrag(e.dataTransfer)
+                    )
+                  )
+                    return;
                   e.preventDefault();
                   setDropTargetActive(true);
                 }}
                 onDragOver={(e) => {
-                  if (!caps.write || !hasNasfilesDrag(e.dataTransfer)) return;
+                  if (
+                    !caps.write ||
+                    !(
+                      hasNasfilesDrag(e.dataTransfer) ||
+                      hasExternalFileDrag(e.dataTransfer)
+                    )
+                  )
+                    return;
                   e.preventDefault();
-                  e.dataTransfer.dropEffect = "move";
+                  e.dataTransfer.dropEffect = hasExternalFileDrag(
+                    e.dataTransfer,
+                  )
+                    ? "copy"
+                    : "move";
                 }}
                 onDragLeave={(e) => {
                   if (e.currentTarget.contains(e.relatedTarget as Node | null))
@@ -1141,9 +1174,14 @@ function FileBrowser() {
                   resetCurrentDropTarget();
                 }}
                 onDrop={(e) => {
-                  if (!caps.write || !hasNasfilesDrag(e.dataTransfer)) return;
-                  e.preventDefault();
-                  e.stopPropagation();
+                  if (
+                    !caps.write ||
+                    !(
+                      hasNasfilesDrag(e.dataTransfer) ||
+                      hasExternalFileDrag(e.dataTransfer)
+                    )
+                  )
+                    return;
                   resetCurrentDropTarget();
                   handleFileDrop(root, path, e);
                 }}
