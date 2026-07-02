@@ -29,20 +29,8 @@ pub async fn share_metadata(
                     .flatten()
                     .unwrap_or_else(|| "Unknown".to_string());
 
-            // Determine the displayed name
-            let name = if share.relative_path.is_empty() {
-                share.root_key.clone()
-            } else {
-                share
-                    .relative_path
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(&share.relative_path)
-                    .to_string()
-            };
-
             Json(serde_json::json!({
-                "name": name,
+                "name": share.display_name(),
                 "is_directory": share.is_directory,
                 "requires_password": share.password_hash.is_some(),
                 "owner_display_name": owner_name,

@@ -82,11 +82,17 @@ impl ShareRateLimiter {
     }
 }
 
-/// Resolve a raw share token to a Share record.
+/// Resolve a raw share token to a Share record, without checking expiry or
+/// revocation.
 ///
-/// Hashes the token with SHA-256 and looks it up in the database.
-/// Checks that the share is not expired and not revoked.
-pub async fn resolve_share(pool: &AnyPool, raw_token: &str) -> Result<Share, ShareAccessError> {
+/// Used where the caller needs to distinguish "token doesn't exist" from
+/// "existed but is no longer accessible" — e.g. the social-preview metadata
+/// endpoint, which surfaces an explicit "this share expired" message rather
+/// than a generic 404.
+pub async fn resolve_share_unchecked(
+    pool: &AnyPool,
+    raw_token: &str,
+) -> Result<Share, ShareAccessError> {
     let token_hash = tokens::hash_token(raw_token);
 
     let row = sqlx::query_as::<_, ShareRow>(
@@ -105,7 +111,15 @@ pub async fn resolve_share(pool: &AnyPool, raw_token: &str) -> Result<Share, Sha
     .map_err(|e| ShareAccessError::Database(e.to_string()))?
     .ok_or(ShareAccessError::NotFound)?;
 
-    let share = row.into_share()?;
+    row.into_share()
+}
+
+/// Resolve a raw share token to a Share record.
+///
+/// Hashes the token with SHA-256 and looks it up in the database.
+/// Checks that the share is not expired and not revoked.
+pub async fn resolve_share(pool: &AnyPool, raw_token: &str) -> Result<Share, ShareAccessError> {
+    let share = resolve_share_unchecked(pool, raw_token).await?;
 
     // Check revoked
     if share.revoked_at.is_some() {

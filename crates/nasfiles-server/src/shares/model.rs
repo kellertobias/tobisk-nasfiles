@@ -20,6 +20,59 @@ pub struct Share {
     pub revoked_at: Option<i64>,
 }
 
+impl Share {
+    /// The user-facing name of the shared item — the last path segment of
+    /// `relative_path`, or `root_key` when the share targets an entire root.
+    pub fn display_name(&self) -> &str {
+        if self.relative_path.is_empty() {
+            &self.root_key
+        } else {
+            self.relative_path
+                .rsplit('/')
+                .next()
+                .unwrap_or(&self.relative_path)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn share(root_key: &str, relative_path: &str) -> Share {
+        Share {
+            id: "id".to_string(),
+            token_hash: "hash".to_string(),
+            owner_user_id: "owner".to_string(),
+            root_kind: "common".to_string(),
+            root_key: root_key.to_string(),
+            relative_path: relative_path.to_string(),
+            is_directory: true,
+            target_kind: TargetKind::Public,
+            target_user_id: None,
+            password_hash: None,
+            allow_upload: false,
+            allow_download: true,
+            expires_at: None,
+            created_at: 0,
+            revoked_at: None,
+        }
+    }
+
+    #[test]
+    fn display_name_uses_root_key_when_sharing_a_whole_root() {
+        assert_eq!(share("Documents", "").display_name(), "Documents");
+    }
+
+    #[test]
+    fn display_name_uses_last_path_segment_for_nested_shares() {
+        assert_eq!(
+            share("Documents", "reports/2026/q1.pdf").display_name(),
+            "q1.pdf"
+        );
+    }
+}
+
 /// The kind of share target.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -316,11 +316,13 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let public_routes = Router::new()
+        .route("/og/app-icon.jpg", get(api::og::app_icon))
         .route(
             "/shares/{token}/s3-credentials",
             post(api::public::share_s3_credentials),
         )
         .route("/shares/{token}", get(api::public::share_metadata))
+        .route("/shares/{token}/og-image", get(api::og::share_og_image))
         .route("/shares/{token}/auth", post(api::public::share_auth))
         .route("/shares/{token}/list", get(api::public::share_list))
         .route("/shares/{token}/download", get(api::public::share_download))
