@@ -2600,6 +2600,7 @@ dependencies = [
  "aes-gcm 0.10.3",
  "anyhow",
  "argon2 0.5.3",
+ "async-trait",
  "async_zip",
  "axum",
  "axum-extra",

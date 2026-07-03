@@ -6,6 +6,7 @@ import { Icon } from "../components/Icon";
 import { AppLogo } from "../components/AppLogo";
 import { prepareRequestOptions, serializeCredential } from "../lib/webauthn";
 import { storeTrustedTotp, trustedTotpProof } from "../lib/totp";
+import { takePendingShareId } from "../lib/shareTarget";
 
 export const Route = createFileRoute("/")({
   component: IndexPage,
@@ -88,6 +89,16 @@ function IndexPage() {
 
   useEffect(() => {
     if (user && user.roots.length > 0) {
+      const pendingShareId = takePendingShareId();
+      if (pendingShareId) {
+        navigate({
+          to: "/share-target",
+          search: { shareId: pendingShareId },
+          replace: true,
+        });
+        return;
+      }
+
       // Redirect to home root if present, else first available root
       const defaultRoot =
         user.roots.find((r) => r.kind === "home") || user.roots[0];

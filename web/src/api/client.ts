@@ -105,6 +105,7 @@ async function apiFetch<T>(
     // when the user is not authenticated.
     if (
       window.location.pathname !== "/" &&
+      window.location.pathname !== "/share-target" &&
       !window.location.pathname.startsWith("/s/")
     ) {
       window.location.href = "/";

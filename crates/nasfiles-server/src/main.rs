@@ -22,7 +22,7 @@ use tower_http::{
     compression::CompressionLayer, cors::CorsLayer, set_header::SetResponseHeaderLayer,
     trace::TraceLayer,
 };
-use tower_sessions::{Expiry, MemoryStore, SessionManagerLayer};
+use tower_sessions::{Expiry, SessionManagerLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -67,8 +67,8 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Session store (using memory store for now — can swap to sqlx store later)
-    let session_store = MemoryStore::default();
+    // Store sessions in the same persistent database so logins survive restarts.
+    let session_store = auth::session::PersistentSessionStore::connect(&config.db_url).await?;
     let session_layer = SessionManagerLayer::new(session_store)
         .with_name(auth::session::cookie_name())
         .with_secure(auth::session::is_secure(&config))

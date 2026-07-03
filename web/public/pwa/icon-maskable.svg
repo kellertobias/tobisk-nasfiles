@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="80" y1="64" x2="432" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5f7cff"/>
+      <stop offset=".52" stop-color="#31b5c9"/>
+      <stop offset="1" stop-color="#36c17b"/>
+    </linearGradient>
+    <linearGradient id="page" x1="174" y1="154" x2="350" y2="374" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff"/>
+      <stop offset="1" stop-color="#dff7f2"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <path d="M140 215c0-22.1 17.9-40 40-40h56c9.2 0 18 3.7 24.5 10.2l14.7 14.7c6.5 6.5 15.3 10.1 24.5 10.1H354c22.1 0 40 17.9 40 40v92c0 24.3-19.7 44-44 44H184c-24.3 0-44-19.7-44-44V215Z" fill="#0f2630" opacity=".22"/>
+  <path d="M126 200c0-22.1 17.9-40 40-40h58c9 0 17.5 3.6 23.9 9.9l16.9 16.9c6.3 6.3 14.9 9.9 23.9 9.9H348c22.1 0 40 17.9 40 40V326c0 24.3-19.7 44-44 44H170c-24.3 0-44-19.7-44-44V200Z" fill="url(#page)"/>
+  <path d="M200 264h116M200 307h80" stroke="#26767b" stroke-width="22" stroke-linecap="round"/>
+  <path d="M352 164v-31M352 133h-31M352 133l-51 51" stroke="#e9fff8" stroke-width="22" stroke-linecap="round" stroke-linejoin="round" opacity=".95"/>
+</svg>

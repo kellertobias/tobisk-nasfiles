@@ -9,12 +9,18 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as ShareTargetRouteImport } from './routes/share-target'
 import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as STokenSplatRouteImport } from './routes/s.$token.$'
 import { Route as RRootSplatRouteImport } from './routes/r.$root.$'
 
+const ShareTargetRoute = ShareTargetRouteImport.update({
+  id: '/share-target',
+  path: '/share-target',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ProfileRoute = ProfileRouteImport.update({
   id: '/profile',
   path: '/profile',
@@ -45,6 +51,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
   '/profile': typeof ProfileRoute
+  '/share-target': typeof ShareTargetRoute
   '/r/$root/$': typeof RRootSplatRoute
   '/s/$token/$': typeof STokenSplatRoute
 }
@@ -52,6 +59,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
   '/profile': typeof ProfileRoute
+  '/share-target': typeof ShareTargetRoute
   '/r/$root/$': typeof RRootSplatRoute
   '/s/$token/$': typeof STokenSplatRoute
 }
@@ -60,27 +68,55 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
   '/profile': typeof ProfileRoute
+  '/share-target': typeof ShareTargetRoute
   '/r/$root/$': typeof RRootSplatRoute
   '/s/$token/$': typeof STokenSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/admin' | '/profile' | '/r/$root/$' | '/s/$token/$'
+  fullPaths:
+    | '/'
+    | '/admin'
+    | '/profile'
+    | '/share-target'
+    | '/r/$root/$'
+    | '/s/$token/$'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/admin' | '/profile' | '/r/$root/$' | '/s/$token/$'
-  id: '__root__' | '/' | '/admin' | '/profile' | '/r/$root/$' | '/s/$token/$'
+  to:
+    | '/'
+    | '/admin'
+    | '/profile'
+    | '/share-target'
+    | '/r/$root/$'
+    | '/s/$token/$'
+  id:
+    | '__root__'
+    | '/'
+    | '/admin'
+    | '/profile'
+    | '/share-target'
+    | '/r/$root/$'
+    | '/s/$token/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRoute
   ProfileRoute: typeof ProfileRoute
+  ShareTargetRoute: typeof ShareTargetRoute
   RRootSplatRoute: typeof RRootSplatRoute
   STokenSplatRoute: typeof STokenSplatRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/share-target': {
+      id: '/share-target'
+      path: '/share-target'
+      fullPath: '/share-target'
+      preLoaderRoute: typeof ShareTargetRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/profile': {
       id: '/profile'
       path: '/profile'
@@ -123,6 +159,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRoute,
   ProfileRoute: ProfileRoute,
+  ShareTargetRoute: ShareTargetRoute,
   RRootSplatRoute: RRootSplatRoute,
   STokenSplatRoute: STokenSplatRoute,
 }
