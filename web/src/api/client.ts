@@ -11,6 +11,11 @@ export interface DownloadProgress {
   pct: number | null;
 }
 
+interface AbortableDownload {
+  promise: Promise<void>;
+  abort: () => void;
+}
+
 class ApiError extends Error {
   status: number;
   statusText: string;
@@ -29,6 +34,13 @@ export class UploadAbortedError extends Error {
   constructor() {
     super("Upload cancelled");
     this.name = "UploadAbortedError";
+  }
+}
+
+export class DownloadAbortedError extends Error {
+  constructor() {
+    super("Download cancelled");
+    this.name = "DownloadAbortedError";
   }
 }
 
@@ -1078,9 +1090,9 @@ export const api = {
     bearer: string,
     path: string,
     onProgress?: (progress: DownloadProgress) => void,
-  ) => {
-    return new Promise<void>((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
+  ): AbortableDownload => {
+    const xhr = new XMLHttpRequest();
+    const promise = new Promise<void>((resolve, reject) => {
       xhr.open(
         "GET",
         `/api/public/shares/${encodeURIComponent(token)}/download?path=${encodeURIComponent(path)}`,
@@ -1118,8 +1130,10 @@ export const api = {
       xhr.addEventListener("error", () =>
         reject(new ApiError(0, "Network error", null)),
       );
+      xhr.addEventListener("abort", () => reject(new DownloadAbortedError()));
       xhr.send();
     });
+    return { promise, abort: () => xhr.abort() };
   },
 
   shareInfo: (token: string, bearer: string, path: string) =>
@@ -1161,9 +1175,9 @@ export const api = {
     bearer: string,
     paths: string[],
     onProgress?: (progress: DownloadProgress) => void,
-  ) => {
-    return new Promise<void>((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
+  ): AbortableDownload => {
+    const xhr = new XMLHttpRequest();
+    const promise = new Promise<void>((resolve, reject) => {
       xhr.open("POST", `/api/public/shares/${encodeURIComponent(token)}/zip`);
       xhr.setRequestHeader("Content-Type", "application/json");
       xhr.setRequestHeader("Authorization", `Bearer ${bearer}`);
@@ -1200,8 +1214,10 @@ export const api = {
       xhr.addEventListener("error", () =>
         reject(new ApiError(0, "Network error", null)),
       );
+      xhr.addEventListener("abort", () => reject(new DownloadAbortedError()));
       xhr.send(JSON.stringify({ paths }));
     });
+    return { promise, abort: () => xhr.abort() };
   },
 
   shareUpload: (

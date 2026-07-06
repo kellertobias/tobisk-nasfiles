@@ -5,7 +5,7 @@ import {
 } from "@tanstack/react-router";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import api, { UploadAbortedError } from "../api/client";
+import api, { DownloadAbortedError, UploadAbortedError } from "../api/client";
 import type { DownloadProgress, FileEntry } from "../api/client";
 import {
   getFileIcon,
@@ -39,6 +39,7 @@ interface ActiveDownload {
   loadedBytes: number;
   totalBytes: number | null;
   pct: number | null;
+  status: "downloading" | "cancelled";
 }
 
 function fileDownloadKey(path: string) {
@@ -89,6 +90,7 @@ function ShareViewer() {
     new Map(),
   );
   const activeDownloadKeysRef = useRef<Set<string>>(new Set());
+  const downloadAbortMapRef = useRef<Map<string, () => void>>(new Map());
   const dragCounterRef = useRef(0);
   const uploadAbortMapRef = useRef<Map<string, () => void>>(new Map());
   const uploadCancelledRef = useRef<Set<string>>(new Set());
@@ -212,6 +214,7 @@ function ShareViewer() {
           loadedBytes: progress.loaded,
           totalBytes: progress.total,
           pct: progress.pct,
+          status: "downloading",
         },
       }));
     },
@@ -227,15 +230,39 @@ function ShareViewer() {
       const label = path.split("/").pop() || meta?.name || "Download";
       setActiveDownloads((prev) => ({
         ...prev,
-        [key]: { label, loadedBytes: 0, totalBytes: null, pct: null },
+        [key]: {
+          label,
+          loadedBytes: 0,
+          totalBytes: null,
+          pct: null,
+          status: "downloading",
+        },
       }));
+      const handle = api.shareDownloadFile(token, bearer, path, (progress) =>
+        updateDownloadProgress(key, label, progress),
+      );
+      downloadAbortMapRef.current.set(key, handle.abort);
       try {
-        await api.shareDownloadFile(token, bearer, path, (progress) =>
-          updateDownloadProgress(key, label, progress),
-        );
-      } catch {
+        await handle.promise;
+      } catch (err) {
+        if (err instanceof DownloadAbortedError) {
+          setActiveDownloads((prev) => ({
+            ...prev,
+            [key]: {
+              ...(prev[key] ?? {
+                label,
+                loadedBytes: 0,
+                totalBytes: null,
+                pct: null,
+              }),
+              status: "cancelled",
+            },
+          }));
+          return;
+        }
         window.open(api.shareDownloadUrl(token, bearer, path), "_blank");
       } finally {
+        downloadAbortMapRef.current.delete(key);
         clearDownloadSoon(key);
       }
     },
@@ -253,9 +280,34 @@ function ShareViewer() {
     () => () => {
       if (uploadHideTimerRef.current) clearTimeout(uploadHideTimerRef.current);
       downloadHideTimersRef.current.forEach((timer) => clearTimeout(timer));
+      downloadAbortMapRef.current.forEach((abort) => abort());
+      downloadAbortMapRef.current.clear();
       activeDownloadKeysRef.current.clear();
     },
     [],
+  );
+
+  const handleCancelDownload = useCallback(
+    (key: string) => {
+      const abort = downloadAbortMapRef.current.get(key);
+      if (!abort) return;
+      abort();
+      downloadAbortMapRef.current.delete(key);
+      setActiveDownloads((prev) => ({
+        ...prev,
+        [key]: {
+          ...(prev[key] ?? {
+            label: "Download",
+            loadedBytes: 0,
+            totalBytes: null,
+            pct: null,
+          }),
+          status: "cancelled",
+        },
+      }));
+      clearDownloadSoon(key);
+    },
+    [clearDownloadSoon],
   );
 
   const handleShareUpload = useCallback(
@@ -442,6 +494,9 @@ function ShareViewer() {
         target={previewTarget}
         activeDownload={activeDownloads[fileDownloadKey(previewTarget.path)]}
         onDownload={() => handleDownload(previewTarget.path)}
+        onCancelDownload={() =>
+          handleCancelDownload(fileDownloadKey(previewTarget.path))
+        }
         onClose={() => setPreviewTarget(null)}
       />
     ) : null;
@@ -676,7 +731,10 @@ function ShareViewer() {
           )}
           {singleDownload && (
             <div style={{ width: "100%", marginTop: "var(--space-3)" }}>
-              <DownloadProgressBar download={singleDownload} />
+              <DownloadProgressBar
+                download={singleDownload}
+                onCancel={() => handleCancelDownload(fileDownloadKey(""))}
+              />
             </div>
           )}
         </div>
@@ -824,20 +882,39 @@ function ShareViewer() {
                     loadedBytes: 0,
                     totalBytes: null,
                     pct: null,
+                    status: "downloading",
                   },
                 }));
+                const handle = api.shareDownloadZip(
+                  token,
+                  bearer,
+                  [subPath || ""],
+                  (progress) =>
+                    updateDownloadProgress(key, "download.zip", progress),
+                );
+                downloadAbortMapRef.current.set(key, handle.abort);
                 try {
-                  await api.shareDownloadZip(
-                    token,
-                    bearer,
-                    [subPath || ""],
-                    (progress) =>
-                      updateDownloadProgress(key, "download.zip", progress),
-                  );
-                } catch {
+                  await handle.promise;
+                } catch (err) {
+                  if (err instanceof DownloadAbortedError) {
+                    setActiveDownloads((prev) => ({
+                      ...prev,
+                      [key]: {
+                        ...(prev[key] ?? {
+                          label: "download.zip",
+                          loadedBytes: 0,
+                          totalBytes: null,
+                          pct: null,
+                        }),
+                        status: "cancelled",
+                      },
+                    }));
+                    return;
+                  }
                   setZipError("Failed to download files. Please try again.");
                 } finally {
                   setIsZipping(false);
+                  downloadAbortMapRef.current.delete(key);
                   clearDownloadSoon(key);
                 }
               }}
@@ -872,6 +949,7 @@ function ShareViewer() {
             {activeDownloads[zipDownloadKey(subPath || "")] && (
               <DownloadProgressBar
                 download={activeDownloads[zipDownloadKey(subPath || "")]}
+                onCancel={() => handleCancelDownload(zipDownloadKey(subPath || ""))}
               />
             )}
             {zipError && (
@@ -1021,7 +1099,13 @@ function ShareViewer() {
                       }}
                     >
                       {activeFileDownload ? (
-                        <DownloadProgressBar download={activeFileDownload} compact />
+                        <DownloadProgressBar
+                          download={activeFileDownload}
+                          compact
+                          onCancel={() =>
+                            handleCancelDownload(fileDownloadKey(entryPath))
+                          }
+                        />
                       ) : entry.is_dir ? (
                         "—"
                       ) : (
@@ -1268,17 +1352,20 @@ function ShareViewer() {
 
 function downloadButtonLabel(download?: ActiveDownload) {
   if (!download) return "Downloading…";
+  if (download.status === "cancelled") return "Cancelled";
   if (download.pct !== null) return `Downloading ${download.pct}%`;
   return "Downloading…";
 }
 
 function downloadStatusLabel(download: ActiveDownload) {
+  if (download.status === "cancelled") return "Cancelled";
   if (download.pct !== null) return `${download.pct}%`;
   if (download.loadedBytes > 0) return formatFileSize(download.loadedBytes);
   return "Starting";
 }
 
 function downloadDetailLabel(download: ActiveDownload) {
+  if (download.status === "cancelled") return "Cancelled";
   if (download.totalBytes && download.totalBytes > 0) {
     return `${formatFileSize(download.loadedBytes)} / ${formatFileSize(download.totalBytes)}`;
   }
@@ -1290,13 +1377,17 @@ function DownloadProgressBar({
   download,
   compact = false,
   dark = false,
+  onCancel,
 }: {
   download: ActiveDownload;
   compact?: boolean;
   dark?: boolean;
+  onCancel?: () => void;
 }) {
   const pct = download.pct;
   const hasPct = pct !== null;
+  const canCancel =
+    download.status === "downloading" && download.pct !== 100 && onCancel;
   return (
     <div style={{ minWidth: compact ? 80 : 0 }}>
       {!compact && (
@@ -1322,26 +1413,73 @@ function DownloadProgressBar({
           <span className="tabular-nums" style={{ whiteSpace: "nowrap" }}>
             {downloadDetailLabel(download)}
           </span>
+          {canCancel && (
+            <button
+              type="button"
+              onClick={onCancel}
+              title="Cancel download"
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                padding: "0 2px",
+                color: dark ? "rgba(255,255,255,0.76)" : "var(--color-fg-muted)",
+                fontSize: "var(--text-xs)",
+                lineHeight: 1,
+              }}
+            >
+              ✕
+            </button>
+          )}
         </div>
       )}
-      <div
-        style={{
-          height: compact ? 4 : 5,
-          borderRadius: 3,
-          background: dark ? "rgba(255,255,255,0.18)" : "var(--color-border)",
-          overflow: "hidden",
-        }}
-      >
+      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
         <div
-          className={hasPct ? undefined : "operation-progress-indeterminate"}
           style={{
-            height: "100%",
-            width: hasPct ? `${Math.max(2, Math.min(100, pct))}%` : "42%",
+            flex: 1,
+            height: compact ? 4 : 5,
             borderRadius: 3,
-            background: dark ? "#fff" : "var(--color-accent)",
-            transition: hasPct ? "width 160ms ease-out" : undefined,
+            background: dark ? "rgba(255,255,255,0.18)" : "var(--color-border)",
+            overflow: "hidden",
           }}
-        />
+        >
+          <div
+            className={hasPct ? undefined : "operation-progress-indeterminate"}
+            style={{
+              height: "100%",
+              width: hasPct ? `${Math.max(2, Math.min(100, pct))}%` : "42%",
+              borderRadius: 3,
+              background:
+                download.status === "cancelled"
+                  ? "var(--color-fg-muted)"
+                  : dark
+                    ? "#fff"
+                    : "var(--color-accent)",
+              transition: hasPct ? "width 160ms ease-out" : undefined,
+            }}
+          />
+        </div>
+        {compact && canCancel && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onCancel();
+            }}
+            title="Cancel download"
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              padding: 0,
+              color: "var(--color-fg-muted)",
+              fontSize: "var(--text-xs)",
+              lineHeight: 1,
+            }}
+          >
+            ✕
+          </button>
+        )}
       </div>
     </div>
   );
@@ -1353,6 +1491,7 @@ function ShareMediaPreviewDialog({
   target,
   activeDownload,
   onDownload,
+  onCancelDownload,
   onClose,
 }: {
   token: string;
@@ -1360,6 +1499,7 @@ function ShareMediaPreviewDialog({
   target: { entry: FileEntry; path: string };
   activeDownload?: ActiveDownload;
   onDownload: () => void;
+  onCancelDownload: () => void;
   onClose: () => void;
 }) {
   const previewType = getPreviewType(target.entry);
@@ -1489,7 +1629,11 @@ function ShareMediaPreviewDialog({
             zIndex: 10,
           }}
         >
-          <DownloadProgressBar download={activeDownload} dark />
+          <DownloadProgressBar
+            download={activeDownload}
+            dark
+            onCancel={onCancelDownload}
+          />
         </div>
       )}
 
