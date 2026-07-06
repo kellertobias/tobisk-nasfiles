@@ -3,6 +3,7 @@ import api, { formatApiError, formatApiErrorDetails } from "../api/client";
 import { Icon } from "./Icon";
 import { ErrorDialog } from "./ErrorNotice";
 import type { ErrorNoticeData } from "./ErrorNotice";
+import { formatExpirationDate } from "../lib/icons";
 
 interface ShareDialogProps {
   open: boolean;
@@ -590,7 +591,7 @@ export function ShareDialog({
                     >
                       Expires:{" "}
                       {s.expires_at
-                        ? new Date(s.expires_at).toLocaleDateString()
+                        ? formatExpirationDate(s.expires_at)
                         : "Never"}
                     </span>
                   </div>

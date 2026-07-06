@@ -10,7 +10,7 @@ import type { DownloadProgress, FileEntry } from "../api/client";
 import {
   getFileIcon,
   formatFileSize,
-  formatDate,
+  formatExpirationDate,
   formatModifiedDate,
   getPreviewType,
 } from "../lib/icons";
@@ -583,7 +583,7 @@ function ShareViewer() {
             {meta?.expires_at && (
               <>
                 <br />
-                Expires {formatDate(meta.expires_at)}
+                Expires {formatExpirationDate(meta.expires_at)}
               </>
             )}
           </p>
@@ -688,7 +688,7 @@ function ShareViewer() {
             {meta?.expires_at && (
               <>
                 <br />
-                Expires {formatDate(meta.expires_at)}
+                Expires {formatExpirationDate(meta.expires_at)}
               </>
             )}
           </p>
@@ -820,7 +820,7 @@ function ShareViewer() {
             Shared by {meta?.owner_display_name}
             {subPath && <span> · {subPath}</span>}
             {meta?.expires_at && (
-              <span> · Expires {formatDate(meta.expires_at)}</span>
+              <span> · Expires {formatExpirationDate(meta.expires_at)}</span>
             )}
           </div>
         </div>

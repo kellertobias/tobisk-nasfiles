@@ -398,6 +398,15 @@ export function formatDate(timestamp: number): string {
   });
 }
 
+export function formatExpirationDate(timestamp: number): string {
+  if (timestamp === 0) return "—";
+  return new Date(timestamp).toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
 function isSameLocalDate(a: Date, b: Date): boolean {
   return (
     a.getFullYear() === b.getFullYear() &&
