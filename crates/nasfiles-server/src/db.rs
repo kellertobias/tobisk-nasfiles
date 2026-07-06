@@ -45,20 +45,12 @@ pub async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
     ];
 
     for migration_sql in migrations {
-        for statement in migration_sql.split(';') {
-            let filtered: String = statement
-                .lines()
-                .filter(|line| !line.trim().starts_with("--"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let trimmed = filtered.trim();
-            if !trimmed.is_empty()
-                && let Err(e) = sqlx::query(trimmed).execute(pool).await
-            {
+        for statement in migration_statements(migration_sql) {
+            if let Err(e) = sqlx::query(&statement).execute(pool).await {
                 if is_idempotent_migration_error(&e) {
                     tracing::debug!("Migration statement already applied, continuing: {e}");
                 } else {
-                    anyhow::bail!("Migration failed for statement `{trimmed}`: {e}");
+                    anyhow::bail!("Migration failed for statement `{statement}`: {e}");
                 }
             }
         }
@@ -66,6 +58,21 @@ pub async fn run_migrations(pool: &AnyPool) -> anyhow::Result<()> {
 
     tracing::info!("Database migrations applied");
     Ok(())
+}
+
+fn migration_statements(migration_sql: &str) -> Vec<String> {
+    let without_line_comments = migration_sql
+        .lines()
+        .filter(|line| !line.trim().starts_with("--"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    without_line_comments
+        .split(';')
+        .map(str::trim)
+        .filter(|statement| !statement.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 fn is_idempotent_migration_error(error: &sqlx::Error) -> bool {
@@ -94,4 +101,30 @@ fn redact_db_url(url: &str) -> String {
     }
     // For SQLite URLs, no credentials to redact
     url.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::migration_statements;
+
+    #[test]
+    fn ignores_semicolons_in_line_comments() {
+        let statements = migration_statements(
+            r#"
+-- This comment contains a semicolon; the rest is still comment text.
+CREATE TABLE IF NOT EXISTS permission_loss_grace (
+    user_id TEXT NOT NULL,
+    root_key TEXT NOT NULL,
+    PRIMARY KEY (user_id, root_key)
+);
+"#,
+        );
+
+        assert_eq!(
+            statements,
+            vec![
+                "CREATE TABLE IF NOT EXISTS permission_loss_grace (\n    user_id TEXT NOT NULL,\n    root_key TEXT NOT NULL,\n    PRIMARY KEY (user_id, root_key)\n)"
+            ]
+        );
+    }
 }
