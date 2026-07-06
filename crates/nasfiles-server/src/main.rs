@@ -50,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Run migrations
     db::run_migrations(&pool).await?;
+    auth::share_audit::run_startup_retention_migration(&pool).await;
 
     auth::local::ensure_setup_admin(&config, &pool).await?;
 
@@ -88,6 +89,7 @@ async fn main() -> anyhow::Result<()> {
     state.search.spawn_refresh_loop();
 
     // Spawn daily share audit background task
+    auth::share_audit::spawn_daily_retention_cleanup(state.clone());
     if matches!(state.config.auth_mode, config::AuthMode::Sso) {
         auth::share_audit::spawn_daily_share_audit(state.clone());
     }
@@ -199,6 +201,7 @@ async fn main() -> anyhow::Result<()> {
         )
         // Admin routes
         .route("/admin/shares", get(api::admin::list_all_shares))
+        .route("/admin/shares/{id}", get(api::admin::get_share_details))
         .route("/admin/access-log", get(api::admin::list_access_log))
         .route("/admin/ip-blocklist", get(api::admin::list_blocklist))
         .route("/admin/ip-blocklist", post(api::admin::add_blocklist_entry))

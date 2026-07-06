@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import api, {
   type ActiveSftpSession,
   type AdminUserDetails,
+  type FileEntry,
   type FolderCaps,
   type IpBlocklistEntry,
   type PasskeyInfo,
@@ -60,6 +61,20 @@ interface AccessLogEntry {
   user_agent: string | null;
   action: string;
   path: string | null;
+  share_root_key: string;
+  share_relative_path: string;
+  share_owner_name: string;
+}
+
+interface AdminShareDetails {
+  share: AdminShare;
+  listing: {
+    path: string;
+    entries?: FileEntry[];
+    file?: boolean;
+    error?: string;
+  };
+  access_log: AccessLogEntry[];
 }
 
 type Tab =
@@ -74,6 +89,7 @@ type Tab =
 function AdminDashboard() {
   const [tab, setTab] = useState<Tab>("shares");
   const [shareFilter, setShareFilter] = useState("all");
+  const [selectedShareId, setSelectedShareId] = useState<string | null>(null);
 
   const { data: user } = useQuery({
     queryKey: ["me"],
@@ -221,9 +237,21 @@ function AdminDashboard() {
           </div>
 
           {tab === "shares" && (
-            <SharesTab filter={shareFilter} setFilter={setShareFilter} />
+            <SharesTab
+              filter={shareFilter}
+              setFilter={setShareFilter}
+              selectedShareId={selectedShareId}
+              setSelectedShareId={setSelectedShareId}
+            />
           )}
-          {tab === "access-log" && <AccessLogTab />}
+          {tab === "access-log" && (
+            <AccessLogTab
+              onOpenShare={(shareId) => {
+                setSelectedShareId(shareId);
+                setTab("shares");
+              }}
+            />
+          )}
           {tab === "users" && <UsersTab />}
           {tab === "sftp" && <SftpGuestsTab />}
           {tab === "sftp-connections" && <SftpConnectionsTab />}
@@ -911,9 +939,13 @@ function SftpGuestsTab() {
 function SharesTab({
   filter,
   setFilter,
+  selectedShareId,
+  setSelectedShareId,
 }: {
   filter: string;
   setFilter: (v: string) => void;
+  selectedShareId: string | null;
+  setSelectedShareId: (v: string | null) => void;
 }) {
   const { data, isLoading } = useQuery({
     queryKey: ["admin-shares", filter],
@@ -928,6 +960,13 @@ function SharesTab({
 
   return (
     <div>
+      {selectedShareId && (
+        <ShareDetailsPanel
+          shareId={selectedShareId}
+          onClose={() => setSelectedShareId(null)}
+        />
+      )}
+
       {/* Filter pills */}
       <div
         style={{
@@ -1001,9 +1040,16 @@ function SharesTab({
                 <tr key={s.id}>
                   <td style={tdStyle}>{s.owner_name}</td>
                   <td style={tdStyle}>
-                    <code style={{ fontSize: "var(--text-xs)" }}>
-                      {s.root_key}/{s.relative_path || ""}
-                    </code>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedShareId(s.id)}
+                      style={linkButtonStyle}
+                      title="Open share details"
+                    >
+                      <code style={{ fontSize: "var(--text-xs)" }}>
+                        {s.root_key}/{s.relative_path || ""}
+                      </code>
+                    </button>
                   </td>
                   <td style={tdStyle}>
                     <div
@@ -1107,11 +1153,216 @@ function SharesTab({
   );
 }
 
+function ShareDetailsPanel({
+  shareId,
+  onClose,
+}: {
+  shareId: string;
+  onClose: () => void;
+}) {
+  const navigate = useNavigate();
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["admin-share-details", shareId],
+    queryFn: () =>
+      fetch(`/api/admin/shares/${encodeURIComponent(shareId)}`, {
+        headers: { "X-NasFiles-Request": "1" },
+      }).then(async (r) => {
+        if (!r.ok) throw new Error(await r.text());
+        return (await r.json()) as AdminShareDetails;
+      }),
+    staleTime: 10_000,
+  });
+
+  const share = data?.share;
+  const entries = data?.listing.entries ?? [];
+  const logEntries = data?.access_log ?? [];
+
+  const openPath = () => {
+    if (!share) return;
+    const targetPath = share.is_directory
+      ? share.relative_path
+      : share.relative_path.split("/").slice(0, -1).join("/");
+    navigate({
+      to: "/r/$root/$",
+      params: { root: share.root_key, _splat: targetPath },
+    });
+  };
+
+  return (
+    <div style={{ ...panelStyle, marginBottom: "var(--space-5)" }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: "var(--space-3)",
+          alignItems: "flex-start",
+          marginBottom: "var(--space-4)",
+        }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <div
+            style={{
+              color: "var(--color-fg-muted)",
+              fontSize: "var(--text-xs)",
+              marginBottom: "var(--space-1)",
+            }}
+          >
+            Share details
+          </div>
+          <code
+            style={{
+              display: "block",
+              fontSize: "var(--text-sm)",
+              overflowWrap: "anywhere",
+            }}
+          >
+            {share ? `${share.root_key}/${share.relative_path || ""}` : shareId}
+          </code>
+        </div>
+        <div style={{ display: "flex", gap: "var(--space-2)" }}>
+          {share && (
+            <button type="button" onClick={openPath} style={actionButtonStyle}>
+              <Icon name="folderOpen" size={16} />
+              Open path
+            </button>
+          )}
+          <button type="button" onClick={onClose} style={actionButtonStyle}>
+            <Icon name="x" size={16} />
+            Close
+          </button>
+        </div>
+      </div>
+
+      {isLoading ? (
+        <LoadingRows />
+      ) : error ? (
+        <div style={errorTextStyle}>{String(error)}</div>
+      ) : share ? (
+        <div style={{ display: "grid", gap: "var(--space-4)" }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+              gap: "var(--space-2)",
+            }}
+          >
+            <DetailStat label="Owner" value={share.owner_name} />
+            <DetailStat
+              label="Created"
+              value={new Date(share.created_at).toLocaleString()}
+            />
+            <DetailStat
+              label="Expires"
+              value={
+                share.expires_at
+                  ? new Date(share.expires_at).toLocaleString()
+                  : "Never"
+              }
+            />
+            <DetailStat label="Accesses" value={String(share.access_count)} />
+            <DetailStat
+              label="Permissions"
+              value={[
+                share.allow_download && "download",
+                share.allow_upload && "upload",
+              ]
+                .filter(Boolean)
+                .join(", ")}
+            />
+          </div>
+
+          <section>
+            <h2 style={sectionHeadingStyle}>Files</h2>
+            {data?.listing.error ? (
+              <div style={errorTextStyle}>{data.listing.error}</div>
+            ) : data?.listing.file ? (
+              <EmptyMessage text="This share points to a single file" />
+            ) : entries.length === 0 ? (
+              <EmptyMessage text="No files in this shared folder" />
+            ) : (
+              <table style={tableStyle}>
+                <thead>
+                  <tr>
+                    <th style={thStyle}>Name</th>
+                    <th style={thStyle}>Type</th>
+                    <th style={thStyle}>Size</th>
+                    <th style={thStyle}>Modified</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {entries.slice(0, 25).map((entry) => (
+                    <tr key={entry.name}>
+                      <td style={tdStyle}>
+                        <Icon
+                          name={entry.is_dir ? "folder" : "file"}
+                          size={14}
+                        />{" "}
+                        {entry.name}
+                      </td>
+                      <td style={tdStyle}>
+                        {entry.is_dir ? "Folder" : entry.mime_type || "File"}
+                      </td>
+                      <td style={tdStyle}>
+                        {entry.is_dir ? "—" : formatBytes(entry.size)}
+                      </td>
+                      <td style={tdStyle}>
+                        {new Date(entry.modified_at).toLocaleString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+
+          <section>
+            <h2 style={sectionHeadingStyle}>Access log</h2>
+            {logEntries.length === 0 ? (
+              <EmptyMessage text="No access log entries for this share" />
+            ) : (
+              <AccessLogTable entries={logEntries} onOpenShare={null} />
+            )}
+          </section>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function DetailStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        padding: "var(--space-2)",
+        border: "1px solid var(--color-border)",
+        borderRadius: "var(--radius-md)",
+      }}
+    >
+      <div
+        style={{
+          color: "var(--color-fg-muted)",
+          fontSize: "var(--text-xs)",
+          marginBottom: 2,
+        }}
+      >
+        {label}
+      </div>
+      <div style={{ fontSize: "var(--text-sm)", overflowWrap: "anywhere" }}>
+        {value || "—"}
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Access log tab
 // ---------------------------------------------------------------------------
 
-function AccessLogTab() {
+function AccessLogTab({
+  onOpenShare,
+}: {
+  onOpenShare: (shareId: string) => void;
+}) {
   const { data, isLoading } = useQuery({
     queryKey: ["admin-access-log"],
     queryFn: () =>
@@ -1127,6 +1378,16 @@ function AccessLogTab() {
   if (entries.length === 0)
     return <EmptyMessage text="No access log entries" />;
 
+  return <AccessLogTable entries={entries} onOpenShare={onOpenShare} />;
+}
+
+function AccessLogTable({
+  entries,
+  onOpenShare,
+}: {
+  entries: AccessLogEntry[];
+  onOpenShare: ((shareId: string) => void) | null;
+}) {
   return (
     <table style={tableStyle}>
       <thead>
@@ -1164,9 +1425,31 @@ function AccessLogTab() {
               </span>
             </td>
             <td style={tdStyle}>
-              <code style={{ fontSize: "var(--text-xs)" }}>
-                {e.share_id.slice(0, 8)}…
-              </code>
+              {onOpenShare ? (
+                <button
+                  type="button"
+                  onClick={() => onOpenShare(e.share_id)}
+                  style={linkButtonStyle}
+                  title="Open share details"
+                >
+                  <code style={{ fontSize: "var(--text-xs)" }}>
+                    {e.share_root_key}/{e.share_relative_path || ""}
+                  </code>
+                </button>
+              ) : (
+                <code style={{ fontSize: "var(--text-xs)" }}>
+                  {e.share_root_key}/{e.share_relative_path || ""}
+                </code>
+              )}
+              <div
+                style={{
+                  color: "var(--color-fg-muted)",
+                  fontSize: "var(--text-xs)",
+                  marginTop: 2,
+                }}
+              >
+                {e.share_owner_name}
+              </div>
             </td>
             <td style={tdStyle}>{e.path || "—"}</td>
             <td style={tdStyle}>{e.ip || "—"}</td>
@@ -2105,6 +2388,24 @@ const actionButtonStyle: React.CSSProperties = {
   cursor: "pointer",
   fontSize: "var(--text-sm)",
   fontWeight: 500,
+};
+
+const linkButtonStyle: React.CSSProperties = {
+  padding: 0,
+  border: 0,
+  background: "transparent",
+  color: "var(--color-accent)",
+  cursor: "pointer",
+  textAlign: "left",
+};
+
+const sectionHeadingStyle: React.CSSProperties = {
+  margin: "0 0 var(--space-2)",
+  color: "var(--color-fg-muted)",
+  fontSize: "var(--text-xs)",
+  fontWeight: 600,
+  letterSpacing: "0.05em",
+  textTransform: "uppercase",
 };
 
 const panelStyle: React.CSSProperties = {

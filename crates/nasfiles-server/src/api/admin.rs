@@ -6,6 +6,7 @@ use axum::{
 use serde::Deserialize;
 
 use crate::auth::middleware::CurrentUser;
+use crate::fs::listing;
 use crate::state::AppState;
 
 /// Middleware check: require admin.
@@ -132,6 +133,27 @@ pub async fn list_all_shares(
     })))
 }
 
+/// GET /api/admin/shares/{id} — share details, directory listing, and recent access log.
+pub async fn get_share_details(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Path(share_id): Path<String>,
+) -> Result<impl IntoResponse, axum::response::Response> {
+    require_admin(&user)?;
+
+    let share = fetch_share_details(&state, &share_id).await?;
+    let entries = list_share_directory(&state, &share)
+        .await
+        .unwrap_or_else(|error| serde_json::json!({ "error": error }));
+    let access_log = fetch_access_log(&state, 100, 0, Some(&share_id)).await?;
+
+    Ok(Json(serde_json::json!({
+        "share": share.to_json(),
+        "listing": entries,
+        "access_log": access_log,
+    })))
+}
+
 /// GET /api/admin/access-log — global access log (admin only).
 pub async fn list_access_log(
     State(state): State<AppState>,
@@ -143,31 +165,20 @@ pub async fn list_access_log(
     let limit = query.limit.clamp(1, 200);
     let offset = query.offset.max(0);
 
-    let rows = sqlx::query_as::<_, AccessLogRow>(
-        r#"
-        SELECT l.id, l.share_id, l.occurred_at, l.ip, l.user_agent, l.action, l.path
-        FROM share_access_log l
-        ORDER BY l.occurred_at DESC
-        LIMIT $1 OFFSET $2
-        "#,
-    )
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("admin access log query: {e}");
-        (
-            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "database error"})),
-        )
-            .into_response()
-    })?;
+    let rows = fetch_access_log(&state, limit, offset, query.share_id.as_deref()).await?;
 
-    let total = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM share_access_log")
-        .fetch_one(&state.pool)
-        .await
-        .unwrap_or(0);
+    let total = if let Some(share_id) = query.share_id.as_deref() {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM share_access_log WHERE share_id = $1")
+            .bind(share_id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap_or(0)
+    } else {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM share_access_log")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap_or(0)
+    };
 
     Ok(Json(serde_json::json!({
         "entries": rows,
@@ -175,6 +186,150 @@ pub async fn list_access_log(
         "limit": limit,
         "offset": offset,
     })))
+}
+
+async fn fetch_access_log(
+    state: &AppState,
+    limit: i64,
+    offset: i64,
+    share_id: Option<&str>,
+) -> Result<Vec<AccessLogRow>, axum::response::Response> {
+    if let Some(share_id) = share_id {
+        sqlx::query_as::<_, AccessLogRow>(
+            r#"
+            SELECT l.id, l.share_id, l.occurred_at, l.ip, l.user_agent, l.action, l.path,
+                   s.root_key AS share_root_key, s.relative_path AS share_relative_path,
+                   u.display_name AS share_owner_name
+            FROM share_access_log l
+            JOIN shares s ON s.id = l.share_id
+            JOIN users u ON u.id = s.owner_user_id
+            WHERE l.share_id = $1
+            ORDER BY l.occurred_at DESC
+            LIMIT $2 OFFSET $3
+            "#,
+        )
+        .bind(share_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("admin share access log query: {e}");
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "database error"})),
+            )
+                .into_response()
+        })
+    } else {
+        sqlx::query_as::<_, AccessLogRow>(
+            r#"
+            SELECT l.id, l.share_id, l.occurred_at, l.ip, l.user_agent, l.action, l.path,
+                   s.root_key AS share_root_key, s.relative_path AS share_relative_path,
+                   u.display_name AS share_owner_name
+            FROM share_access_log l
+            JOIN shares s ON s.id = l.share_id
+            JOIN users u ON u.id = s.owner_user_id
+            ORDER BY l.occurred_at DESC
+            LIMIT $1 OFFSET $2
+            "#,
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|e| {
+            tracing::error!("admin access log query: {e}");
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "database error"})),
+            )
+                .into_response()
+        })
+    }
+}
+
+async fn fetch_share_details(
+    state: &AppState,
+    share_id: &str,
+) -> Result<ShareDetailRow, axum::response::Response> {
+    sqlx::query_as::<_, ShareDetailRow>(
+        r#"
+        SELECT s.id, s.owner_user_id, u.username AS owner_username,
+               u.display_name AS owner_name, s.root_kind, s.root_key,
+               s.relative_path,
+               CASE WHEN s.is_directory THEN 1 ELSE 0 END AS is_directory,
+               s.target_kind,
+               CASE WHEN s.password_hash IS NOT NULL THEN 1 ELSE 0 END AS has_password,
+               CASE WHEN s.allow_upload THEN 1 ELSE 0 END AS allow_upload,
+               CASE WHEN s.allow_download THEN 1 ELSE 0 END AS allow_download,
+               s.expires_at, s.created_at, s.revoked_at, s.revoke_reason, s.revoke_source,
+               (SELECT COUNT(*) FROM share_access_log sal WHERE sal.share_id = s.id) as access_count,
+               (SELECT MAX(occurred_at) FROM share_access_log sal WHERE sal.share_id = s.id) as last_accessed_at
+        FROM shares s
+        JOIN users u ON u.id = s.owner_user_id
+        WHERE s.id = $1
+        "#,
+    )
+    .bind(share_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| {
+        tracing::error!("admin share details query: {e}");
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "database error"})),
+        )
+            .into_response()
+    })?
+    .ok_or_else(|| {
+        (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "share not found"})),
+        )
+            .into_response()
+    })
+}
+
+async fn list_share_directory(
+    state: &AppState,
+    share: &ShareDetailRow,
+) -> Result<serde_json::Value, String> {
+    if !share.is_directory() {
+        return Ok(serde_json::json!({
+            "path": share.relative_path,
+            "entries": [],
+            "file": true,
+        }));
+    }
+
+    let root_path = if share.root_key == "~" {
+        let home_root = state
+            .config
+            .home_folder_root
+            .as_ref()
+            .ok_or_else(|| "home folder root is not configured".to_string())?;
+        home_root.join(nasfiles_core::models::AuthUser::sanitize_username(
+            &share.owner_username,
+        ))
+    } else {
+        state
+            .config
+            .common_folders
+            .get(&share.root_key)
+            .cloned()
+            .ok_or_else(|| format!("root {} is not configured", share.root_key))?
+    };
+
+    let resolved = nasfiles_core::safe_path::resolve(&root_path, &share.relative_path)
+        .map_err(|e| e.to_string())?;
+    let entries = listing::list_directory(&resolved, !state.config.no_server_side_execution)
+        .map_err(|e| e.to_string())?;
+
+    Ok(serde_json::json!({
+        "path": share.relative_path,
+        "entries": entries,
+    }))
 }
 
 /// GET /api/admin/users — list all provisioned users (admin only).
@@ -326,6 +481,8 @@ pub struct AccessLogQuery {
     pub limit: i64,
     #[serde(default)]
     pub offset: i64,
+    #[serde(default)]
+    pub share_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -365,6 +522,61 @@ struct AccessLogRow {
     user_agent: Option<String>,
     action: String,
     path: Option<String>,
+    share_root_key: String,
+    share_relative_path: String,
+    share_owner_name: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct ShareDetailRow {
+    id: String,
+    owner_user_id: String,
+    owner_username: String,
+    owner_name: String,
+    root_kind: String,
+    root_key: String,
+    relative_path: String,
+    is_directory: i64,
+    target_kind: String,
+    has_password: i64,
+    allow_upload: i64,
+    allow_download: i64,
+    expires_at: Option<i64>,
+    created_at: i64,
+    revoked_at: Option<i64>,
+    revoke_reason: Option<String>,
+    revoke_source: Option<String>,
+    access_count: i64,
+    last_accessed_at: Option<i64>,
+}
+
+impl ShareDetailRow {
+    fn is_directory(&self) -> bool {
+        self.is_directory != 0
+    }
+
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "id": &self.id,
+            "owner_user_id": &self.owner_user_id,
+            "owner_name": &self.owner_name,
+            "root_kind": &self.root_kind,
+            "root_key": &self.root_key,
+            "relative_path": &self.relative_path,
+            "is_directory": self.is_directory(),
+            "target_kind": &self.target_kind,
+            "has_password": self.has_password != 0,
+            "allow_upload": self.allow_upload != 0,
+            "allow_download": self.allow_download != 0,
+            "expires_at": self.expires_at,
+            "created_at": self.created_at,
+            "revoked_at": self.revoked_at,
+            "revoke_reason": &self.revoke_reason,
+            "revoke_source": &self.revoke_source,
+            "access_count": self.access_count,
+            "last_accessed_at": self.last_accessed_at,
+        })
+    }
 }
 
 #[derive(sqlx::FromRow, serde::Serialize)]
