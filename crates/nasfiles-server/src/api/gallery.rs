@@ -385,7 +385,7 @@ async fn prepare_gallery(state: AppState, share_id: &str) -> anyhow::Result<()> 
     .await?;
 
     let base = access::resolve_share_path(&state.pool, &state.config, &share, "").await?;
-    let images = scan_gallery_images(&base)?;
+    let images = scan_gallery_images(base.clone()).await?;
     let total = i64::try_from(images.len()).unwrap_or(i64::MAX);
     sqlx::query(
         "UPDATE gallery_preparation_jobs SET total_items = $1, updated_at = $2 WHERE id = $3",
@@ -416,7 +416,7 @@ async fn prepare_gallery(state: AppState, share_id: &str) -> anyhow::Result<()> 
             .unwrap_or("")
             .to_string();
         let item_id = uuid::Uuid::new_v4().to_string();
-        let metadata = std::fs::metadata(path)?;
+        let metadata = tokio::fs::metadata(path).await?;
         let mtime_ms = metadata
             .modified()
             .ok()
@@ -578,26 +578,29 @@ async fn generate_gallery_assets_for_job(
     Ok(())
 }
 
-fn scan_gallery_images(base: &Path) -> anyhow::Result<Vec<PathBuf>> {
-    let mut out = Vec::new();
-    let mut stack = vec![base.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            let name = entry.file_name();
-            if name.to_string_lossy().starts_with('.') {
-                continue;
-            }
-            if path.is_dir() {
-                stack.push(path);
-            } else if is_gallery_image(&path) {
-                out.push(path);
+async fn scan_gallery_images(base: PathBuf) -> anyhow::Result<Vec<PathBuf>> {
+    tokio::task::spawn_blocking(move || {
+        let mut out = Vec::new();
+        let mut stack = vec![base];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                let name = entry.file_name();
+                if name.to_string_lossy().starts_with('.') {
+                    continue;
+                }
+                if path.is_dir() {
+                    stack.push(path);
+                } else if is_gallery_image(&path) {
+                    out.push(path);
+                }
             }
         }
-    }
-    out.sort_by_key(|path| path.to_string_lossy().to_ascii_lowercase());
-    Ok(out)
+        out.sort_by_key(|path| path.to_string_lossy().to_ascii_lowercase());
+        anyhow::Ok(out)
+    })
+    .await?
 }
 
 fn is_gallery_image(path: &Path) -> bool {

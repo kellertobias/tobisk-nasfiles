@@ -213,7 +213,13 @@ impl ThumbnailCache {
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone();
 
-        let _guard = lock.lock().await;
+        let _guard = match lock.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                tracing::debug!("thumbnail generation already active for key {key}");
+                return Err(ThumbError::Busy);
+            }
+        };
 
         if let Some(bytes) = self
             .storage
@@ -229,9 +235,8 @@ impl ThumbnailCache {
         let _slot = self
             .generation_slots
             .clone()
-            .acquire_owned()
-            .await
-            .map_err(|e| ThumbError::Io(e.to_string()))?;
+            .try_acquire_owned()
+            .map_err(|_| ThumbError::Busy)?;
 
         let thumb_bytes = match kind {
             ThumbnailKind::Image => {
@@ -365,14 +370,16 @@ impl ThumbnailCache {
             .entry(key.clone())
             .or_insert_with(|| Arc::new(Mutex::new(())))
             .clone();
-        let _guard = lock.lock().await;
+        let _guard = match lock.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => return Err(ThumbError::Busy),
+        };
 
         let _slot = self
             .generation_slots
             .clone()
-            .acquire_owned()
-            .await
-            .map_err(|e| ThumbError::Io(e.to_string()))?;
+            .try_acquire_owned()
+            .map_err(|_| ThumbError::Busy)?;
 
         let thumb_bytes = generator.await?;
         if let Some(ref bytes) = thumb_bytes {
@@ -404,6 +411,10 @@ pub enum ThumbError {
     Pdf(String),
     #[error("epub processing error: {0}")]
     Epub(String),
+    #[error("external thumbnail process error: {0}")]
+    Process(String),
+    #[error("thumbnail generation workers are busy")]
+    Busy,
     #[error("source file too large for thumbnail generation: {size} bytes exceeds {limit} bytes")]
     TooLarge { size: u64, limit: u64 },
 }
@@ -412,13 +423,15 @@ impl axum::response::IntoResponse for ThumbError {
     fn into_response(self) -> axum::response::Response {
         let status = match &self {
             ThumbError::TooLarge { .. } => axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+            ThumbError::Busy => axum::http::StatusCode::SERVICE_UNAVAILABLE,
             ThumbError::Io(_)
             | ThumbError::Image(_)
             | ThumbError::Svg(_)
             | ThumbError::Video(_)
             | ThumbError::Audio(_)
             | ThumbError::Pdf(_)
-            | ThumbError::Epub(_) => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            | ThumbError::Epub(_)
+            | ThumbError::Process(_) => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
         };
         tracing::warn!("thumbnail error: {self}");
         (
@@ -464,7 +477,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generation_slots_queue_instead_of_failing() {
+    async fn generation_slots_fail_fast_when_busy() {
         let data_dir = tempfile::tempdir().unwrap();
         let cache = ThumbnailCache::new(data_dir.path().join("thumbs"), 1);
         let first = data_dir.path().join("first.jpg");
@@ -498,13 +511,19 @@ mod tests {
                         },
                     )
                     .await
-                    .unwrap()
             })
         };
 
         let (a, b) = tokio::join!(run_one(first, "first.jpg"), run_one(second, "second.jpg"));
-        assert!(a.unwrap().is_some());
-        assert!(b.unwrap().is_some());
+        let results = [a.unwrap(), b.unwrap()];
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, Err(ThumbError::Busy)))
+                .count(),
+            1
+        );
         assert_eq!(max_active.load(Ordering::SeqCst), 1);
     }
 

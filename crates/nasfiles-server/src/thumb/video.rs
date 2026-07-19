@@ -5,7 +5,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use tokio::process::Command;
 
-use super::cache::ThumbError;
+use super::{cache::ThumbError, process};
 
 /// Check if ffmpeg is available on the system.
 pub async fn is_available() -> bool {
@@ -48,26 +48,20 @@ pub async fn generate(source_path: &Path, width: u32) -> Result<Option<Vec<u8>>,
 }
 
 async fn probe_duration_ms(source_path: &Path) -> Result<Option<u64>, ThumbError> {
-    let output = tokio::time::timeout(Duration::from_secs(8), async {
-        Command::new("ffprobe")
-            .arg("-v")
-            .arg("error")
-            .arg("-print_format")
-            .arg("json")
-            .arg("-show_format")
-            .arg(source_path)
-            .output()
-            .await
-    })
-    .await
-    .map_err(|_| ThumbError::Video("ffprobe timed out".to_string()))?
-    .map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            ThumbError::Video("ffprobe is not available".to_string())
-        } else {
-            ThumbError::Video(e.to_string())
-        }
-    })?;
+    let mut command = Command::new("ffprobe");
+    command
+        .arg("-v")
+        .arg("error")
+        .arg("-print_format")
+        .arg("json")
+        .arg("-show_format")
+        .arg(source_path);
+    let Some(output) =
+        process::output_with_timeout(command, Duration::from_secs(8), "ffprobe", source_path)
+            .await?
+    else {
+        return Ok(None);
+    };
 
     if !output.status.success() || output.stdout.is_empty() {
         return Ok(None);
@@ -114,63 +108,51 @@ async fn extract_frame(
         "scale=w='min({width},iw)':h=-2:force_original_aspect_ratio=decrease,scale=w='min(1280,iw)':h='min(720,ih)':force_original_aspect_ratio=decrease,format=yuvj420p"
     );
 
-    let result = tokio::time::timeout(Duration::from_secs(20), async {
-        let output = Command::new("ffmpeg")
-            .arg("-hide_banner")
-            .arg("-loglevel")
-            .arg("error")
-            .arg("-ss")
-            .arg(format!("{offset_seconds:.2}"))
-            .arg("-i")
-            .arg(source_path)
-            .arg("-map")
-            .arg("0:v:0")
-            .arg("-an")
-            .arg("-sn")
-            .arg("-dn")
-            .arg("-frames:v")
-            .arg("1")
-            .arg("-vf")
-            .arg(&scale_filter)
-            .arg("-f")
-            .arg("image2")
-            .arg("-c:v")
-            .arg("mjpeg")
-            .arg("-q:v")
-            .arg("4")
-            .arg("pipe:1")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await;
+    let mut command = Command::new("ffmpeg");
+    command
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-ss")
+        .arg(format!("{offset_seconds:.2}"))
+        .arg("-i")
+        .arg(source_path)
+        .arg("-map")
+        .arg("0:v:0")
+        .arg("-an")
+        .arg("-sn")
+        .arg("-dn")
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-vf")
+        .arg(&scale_filter)
+        .arg("-f")
+        .arg("image2")
+        .arg("-c:v")
+        .arg("mjpeg")
+        .arg("-q:v")
+        .arg("4")
+        .arg("pipe:1")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let Some(out) =
+        process::output_with_timeout(command, Duration::from_secs(20), "ffmpeg", source_path)
+            .await?
+    else {
+        return Ok(None);
+    };
 
-        match output {
-            Ok(out) if out.status.success() && !out.stdout.is_empty() => Ok(Some(out.stdout)),
-            Ok(out) => {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                tracing::warn!(
-                    "ffmpeg thumbnail failed for {} at {offset_seconds:.2}s: status={} stderr={}",
-                    source_path.display(),
-                    out.status,
-                    stderr.trim()
-                );
-                Ok(None)
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(ThumbError::Video(e.to_string())),
-        }
-    })
-    .await;
-
-    match result {
-        Ok(inner) => inner,
-        Err(_) => {
-            tracing::warn!(
-                "ffmpeg thumbnail timed out for {} at {offset_seconds:.2}s",
-                source_path.display()
-            );
-            Ok(None)
-        }
+    if out.status.success() && !out.stdout.is_empty() {
+        Ok(Some(out.stdout))
+    } else {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        tracing::warn!(
+            "ffmpeg thumbnail failed for {} at {offset_seconds:.2}s: status={} stderr={}",
+            source_path.display(),
+            out.status,
+            stderr.trim()
+        );
+        Ok(None)
     }
 }
 

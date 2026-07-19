@@ -4,6 +4,7 @@ pub mod epub;
 pub mod image;
 pub mod kind;
 pub mod pdf;
+pub mod process;
 pub mod raw;
 pub mod render;
 pub mod storage;

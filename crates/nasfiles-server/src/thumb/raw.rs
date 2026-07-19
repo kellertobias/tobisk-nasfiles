@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use tokio::process::Command;
 
-use super::{cache::ThumbError, image as img_thumb};
+use super::{cache::ThumbError, image as img_thumb, process};
 
 pub async fn generate(
     source_path: &Path,
@@ -45,15 +45,15 @@ pub async fn generate(
 }
 
 async fn run_dcraw(source_path: &Path, args: &[&str]) -> Result<Option<Vec<u8>>, ThumbError> {
-    let output = Command::new("dcraw_emu")
-        .args(args)
-        .arg(source_path)
-        .output()
-        .await;
+    let mut command = Command::new("dcraw_emu");
+    command.args(args).arg(source_path);
+    let output =
+        process::output_with_timeout(command, Duration::from_secs(20), "dcraw_emu", source_path)
+            .await?;
 
     match output {
-        Ok(out) if out.status.success() && !out.stdout.is_empty() => Ok(Some(out.stdout)),
-        Ok(out) => {
+        Some(out) if out.status.success() && !out.stdout.is_empty() => Ok(Some(out.stdout)),
+        Some(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr);
             tracing::warn!(
                 "dcraw_emu thumbnail failed for {}: args={:?} status={} stderr={}",
@@ -64,8 +64,7 @@ async fn run_dcraw(source_path: &Path, args: &[&str]) -> Result<Option<Vec<u8>>,
             );
             Ok(None)
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(ThumbError::Image(e.to_string())),
+        None => Ok(None),
     }
 }
 

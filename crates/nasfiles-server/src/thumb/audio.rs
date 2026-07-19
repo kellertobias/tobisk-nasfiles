@@ -5,7 +5,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use tokio::process::Command;
 
-use super::{cache::ThumbError, image as img_thumb, render};
+use super::{cache::ThumbError, image as img_thumb, process, render};
 
 pub async fn generate(
     source_path: &Path,
@@ -53,69 +53,49 @@ pub async fn generate(
 }
 
 async fn extract_embedded_cover(source_path: &Path) -> Result<Option<Vec<u8>>, ThumbError> {
-    let result = tokio::time::timeout(Duration::from_secs(10), async {
-        let output = Command::new("ffmpeg")
-            .arg("-hide_banner")
-            .arg("-loglevel")
-            .arg("error")
-            .arg("-i")
-            .arg(source_path)
-            .arg("-map")
-            .arg("0:v:0")
-            .arg("-an")
-            .arg("-sn")
-            .arg("-dn")
-            .arg("-frames:v")
-            .arg("1")
-            .arg("-f")
-            .arg("image2")
-            .arg("pipe:1")
-            .output()
-            .await;
-
-        match output {
-            Ok(out) if out.status.success() && !out.stdout.is_empty() => Ok(Some(out.stdout)),
-            Ok(_) => Ok(None),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(ThumbError::Audio(e.to_string())),
-        }
-    })
-    .await;
-
-    match result {
-        Ok(inner) => inner,
-        Err(_) => Ok(None),
+    let mut command = Command::new("ffmpeg");
+    command
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-i")
+        .arg(source_path)
+        .arg("-map")
+        .arg("0:v:0")
+        .arg("-an")
+        .arg("-sn")
+        .arg("-dn")
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-f")
+        .arg("image2")
+        .arg("pipe:1");
+    match process::output_with_timeout(command, Duration::from_secs(10), "ffmpeg", source_path)
+        .await?
+    {
+        Some(out) if out.status.success() && !out.stdout.is_empty() => Ok(Some(out.stdout)),
+        Some(_) | None => Ok(None),
     }
 }
 
 async fn probe_tags(source_path: &Path) -> Result<Option<HashMap<String, String>>, ThumbError> {
-    let result = tokio::time::timeout(Duration::from_secs(10), async {
-        let output = Command::new("ffprobe")
-            .arg("-v")
-            .arg("error")
-            .arg("-print_format")
-            .arg("json")
-            .arg("-show_format")
-            .arg(source_path)
-            .output()
-            .await;
-
-        match output {
-            Ok(out) if out.status.success() && !out.stdout.is_empty() => {
-                let parsed: ProbeOutput = serde_json::from_slice(&out.stdout)
-                    .map_err(|e| ThumbError::Audio(e.to_string()))?;
-                Ok(parsed.format.and_then(|format| format.tags))
-            }
-            Ok(_) => Ok(None),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(ThumbError::Audio(e.to_string())),
+    let mut command = Command::new("ffprobe");
+    command
+        .arg("-v")
+        .arg("error")
+        .arg("-print_format")
+        .arg("json")
+        .arg("-show_format")
+        .arg(source_path);
+    match process::output_with_timeout(command, Duration::from_secs(10), "ffprobe", source_path)
+        .await?
+    {
+        Some(out) if out.status.success() && !out.stdout.is_empty() => {
+            let parsed: ProbeOutput = serde_json::from_slice(&out.stdout)
+                .map_err(|e| ThumbError::Audio(e.to_string()))?;
+            Ok(parsed.format.and_then(|format| format.tags))
         }
-    })
-    .await;
-
-    match result {
-        Ok(inner) => inner,
-        Err(_) => Ok(None),
+        Some(_) | None => Ok(None),
     }
 }
 

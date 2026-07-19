@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use tokio::process::Command;
 
-use super::cache::ThumbError;
+use super::{cache::ThumbError, process};
 
 pub async fn is_available() -> bool {
     Command::new("pdftoppm")
@@ -18,45 +18,34 @@ pub async fn is_available() -> bool {
 
 pub async fn generate(source_path: &Path, width: u32) -> Result<Option<Vec<u8>>, ThumbError> {
     let width = width.clamp(240, 1280).to_string();
-    let result = tokio::time::timeout(Duration::from_secs(15), async {
-        let output = Command::new("pdftoppm")
-            .arg("-f")
-            .arg("1")
-            .arg("-singlefile")
-            .arg("-jpeg")
-            .arg("-scale-to")
-            .arg(width)
-            .arg(source_path)
-            .arg("-")
-            .output()
-            .await;
+    let mut command = Command::new("pdftoppm");
+    command
+        .arg("-f")
+        .arg("1")
+        .arg("-singlefile")
+        .arg("-jpeg")
+        .arg("-scale-to")
+        .arg(width)
+        .arg(source_path)
+        .arg("-");
+    let Some(out) =
+        process::output_with_timeout(command, Duration::from_secs(15), "pdftoppm", source_path)
+            .await?
+    else {
+        return Ok(None);
+    };
 
-        match output {
-            Ok(out) if out.status.success() && out.stdout.starts_with(&[0xff, 0xd8]) => {
-                Ok(Some(out.stdout))
-            }
-            Ok(out) => {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                tracing::warn!(
-                    "pdftoppm thumbnail failed for {}: status={} stderr={}",
-                    source_path.display(),
-                    out.status,
-                    stderr.trim()
-                );
-                Ok(None)
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(ThumbError::Pdf(e.to_string())),
-        }
-    })
-    .await;
-
-    match result {
-        Ok(inner) => inner,
-        Err(_) => {
-            tracing::warn!("pdftoppm thumbnail timed out for {}", source_path.display());
-            Ok(None)
-        }
+    if out.status.success() && out.stdout.starts_with(&[0xff, 0xd8]) {
+        Ok(Some(out.stdout))
+    } else {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        tracing::warn!(
+            "pdftoppm thumbnail failed for {}: status={} stderr={}",
+            source_path.display(),
+            out.status,
+            stderr.trim()
+        );
+        Ok(None)
     }
 }
 
