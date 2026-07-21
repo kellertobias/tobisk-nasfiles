@@ -407,8 +407,6 @@ pub enum ThumbError {
     Video(String),
     #[error("audio processing error: {0}")]
     Audio(String),
-    #[error("pdf processing error: {0}")]
-    Pdf(String),
     #[error("epub processing error: {0}")]
     Epub(String),
     #[error("external thumbnail process error: {0}")]
@@ -429,7 +427,6 @@ impl axum::response::IntoResponse for ThumbError {
             | ThumbError::Svg(_)
             | ThumbError::Video(_)
             | ThumbError::Audio(_)
-            | ThumbError::Pdf(_)
             | ThumbError::Epub(_)
             | ThumbError::Process(_) => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
         };

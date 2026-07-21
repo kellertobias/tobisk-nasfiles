@@ -57,6 +57,6 @@ mod tests {
     async fn missing_pdf_returns_no_thumbnail() {
         let path = Path::new("/definitely/missing.pdf");
         let result = generate(path, 480).await;
-        assert!(result.is_ok() || matches!(result, Err(ThumbError::Pdf(_))));
+        assert!(matches!(result, Ok(None) | Err(ThumbError::Process(_))));
     }
 }
