@@ -200,3 +200,27 @@ pub async fn stream_zip(
     )
         .into_response())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::collect_entries;
+
+    #[test]
+    fn collects_mixed_file_and_folder_selection() {
+        let temp = tempfile::tempdir().expect("create temp directory");
+        let file = temp.path().join("one.txt");
+        let folder = temp.path().join("Folder");
+        let nested = folder.join("nested.txt");
+        std::fs::create_dir(&folder).expect("create selected folder");
+        std::fs::write(&file, "one").expect("write selected file");
+        std::fs::write(&nested, "nested").expect("write nested file");
+
+        let mut archive_paths = collect_entries(&[file, folder])
+            .into_iter()
+            .map(|(archive_path, _)| archive_path)
+            .collect::<Vec<_>>();
+        archive_paths.sort();
+
+        assert_eq!(archive_paths, ["Folder/nested.txt", "one.txt"]);
+    }
+}

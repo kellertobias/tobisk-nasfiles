@@ -51,6 +51,8 @@ function zipDownloadKey(path: string) {
   return `zip:${path}`;
 }
 
+const selectionZipDownloadKey = "zip:selection";
+
 // @tour share-management:90 A visitor opens the link
 // The route pulls `token` from params and the in-share subdirectory from `params._splat`,
 // and a `phase` state machine walks `loading → password | browsing | error`.
@@ -89,6 +91,8 @@ function ShareViewer() {
   >([]);
   const [showUploadProgress, setShowUploadProgress] = useState(false);
   const [zipError, setZipError] = useState("");
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [activeDownloads, setActiveDownloads] = useState<
     Record<string, ActiveDownload>
   >({});
@@ -286,9 +290,8 @@ function ShareViewer() {
   );
 
   const handleZipDownload = useCallback(
-    async (path: string, label: string) => {
+    async (paths: string[], key: string, label: string) => {
       if (!bearer) return;
-      const key = zipDownloadKey(path);
       if (activeDownloadKeysRef.current.has(key)) return;
       activeDownloadKeysRef.current.add(key);
       setZipError("");
@@ -302,7 +305,7 @@ function ShareViewer() {
           status: "downloading",
         },
       }));
-      const handle = api.shareDownloadZip(token, bearer, [path], (progress) =>
+      const handle = api.shareDownloadZip(token, bearer, paths, (progress) =>
         updateDownloadProgress(key, label, progress),
       );
       downloadAbortMapRef.current.set(key, handle.abort);
@@ -332,6 +335,20 @@ function ShareViewer() {
     },
     [bearer, clearDownloadSoon, token, updateDownloadProgress],
   );
+
+  useEffect(() => {
+    setSelectionMode(false);
+    setSelectedPaths(new Set());
+  }, [subPath, token]);
+
+  const toggleSelection = useCallback((path: string) => {
+    setSelectedPaths((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }, []);
 
   // Cancel pending upload auto-hide on unmount.
   useEffect(
@@ -811,6 +828,43 @@ function ShareViewer() {
     );
   }
 
+  const visibleEntryPaths = entries.map((entry) =>
+    subPath ? `${subPath}/${entry.name}` : entry.name,
+  );
+  const selectedDownloadPaths = visibleEntryPaths.filter((path) =>
+    selectedPaths.has(path),
+  );
+  const allVisibleEntriesSelected =
+    visibleEntryPaths.length > 0 &&
+    selectedDownloadPaths.length === visibleEntryPaths.length;
+  const zipDownloads = [
+    {
+      key: zipDownloadKey(""),
+      paths: [""],
+      label: "Download all",
+      disabled: false,
+    },
+    ...(selectionMode
+      ? [
+          {
+            key: selectionZipDownloadKey,
+            paths: selectedDownloadPaths,
+            label: "Download selection",
+            disabled: selectedDownloadPaths.length === 0,
+          },
+        ]
+      : subPath
+        ? [
+            {
+              key: zipDownloadKey(subPath),
+              paths: [subPath],
+              label: "Download folder",
+              disabled: false,
+            },
+          ]
+        : []),
+  ];
+
   // Directory listing
   return (
     <div
@@ -834,6 +888,7 @@ function ShareViewer() {
           display: "flex",
           alignItems: "center",
           gap: "var(--space-3)",
+          flexWrap: "wrap",
         }}
       >
         {subPath ? (
@@ -933,23 +988,67 @@ function ShareViewer() {
             </button>
           </>
         )}
+        {meta?.allow_download && entries.length > 0 && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "var(--space-2)",
+            }}
+          >
+            {selectionMode && (
+              <>
+                <span
+                  style={{
+                    color: "var(--color-fg-muted)",
+                    fontSize: "var(--text-xs)",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {selectedDownloadPaths.length} selected
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSelectedPaths(
+                      allVisibleEntriesSelected
+                        ? new Set()
+                        : new Set(visibleEntryPaths),
+                    )
+                  }
+                  style={shareHeaderButtonStyle}
+                >
+                  {allVisibleEntriesSelected ? "Clear all" : "Select all"}
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setSelectionMode((current) => !current);
+                setSelectedPaths(new Set());
+              }}
+              style={shareHeaderButtonStyle}
+            >
+              {selectionMode ? "Cancel" : "Select"}
+            </button>
+          </div>
+        )}
         {meta?.allow_download && (
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <div style={{ display: "flex", gap: "var(--space-2)" }}>
-              {[
-                { path: "", label: "Download all" },
-                ...(subPath
-                  ? [{ path: subPath, label: "Download folder" }]
-                  : []),
-              ].map((download) => {
-                const key = zipDownloadKey(download.path);
-                const activeDownload = activeDownloads[key];
+              {zipDownloads.map((download) => {
+                const activeDownload = activeDownloads[download.key];
                 return (
                   <button
-                    key={key}
-                    disabled={Boolean(activeDownload)}
+                    key={download.key}
+                    disabled={download.disabled || Boolean(activeDownload)}
                     onClick={() =>
-                      handleZipDownload(download.path, download.label)
+                      handleZipDownload(
+                        download.paths,
+                        download.key,
+                        download.label,
+                      )
                     }
                     style={{
                       display: "flex",
@@ -960,14 +1059,18 @@ function ShareViewer() {
                       borderRadius: "var(--radius-md)",
                       background: "var(--color-bg)",
                       color: "var(--color-fg)",
-                      cursor: activeDownload ? "progress" : "pointer",
-                      opacity: activeDownload ? 0.7 : 1,
+                      cursor: activeDownload
+                        ? "progress"
+                        : download.disabled
+                          ? "not-allowed"
+                          : "pointer",
+                      opacity: activeDownload || download.disabled ? 0.7 : 1,
                       fontWeight: 500,
                       fontSize: "var(--text-sm)",
                       transition: "background var(--duration-fast)",
                     }}
                     onMouseOver={(e) => {
-                      if (!activeDownload)
+                      if (!activeDownload && !download.disabled)
                         e.currentTarget.style.background =
                           "var(--color-bg-muted)";
                     }}
@@ -983,14 +1086,13 @@ function ShareViewer() {
                 );
               })}
             </div>
-            {["", ...(subPath ? [subPath] : [])].map((path) => {
-              const key = zipDownloadKey(path);
-              const activeDownload = activeDownloads[key];
+            {zipDownloads.map((download) => {
+              const activeDownload = activeDownloads[download.key];
               return activeDownload ? (
                 <DownloadProgressBar
-                  key={key}
+                  key={download.key}
                   download={activeDownload}
-                  onCancel={() => handleCancelDownload(key)}
+                  onCancel={() => handleCancelDownload(download.key)}
                 />
               ) : null;
             })}
@@ -1049,10 +1151,13 @@ function ShareViewer() {
                   previewType === "video" || previewType === "audio";
                 const activeFileDownload =
                   activeDownloads[fileDownloadKey(entryPath)];
+                const isSelected = selectedPaths.has(entryPath);
 
                 return (
                   <div
                     key={entry.name}
+                    role={selectionMode ? "option" : undefined}
+                    aria-selected={selectionMode ? isSelected : undefined}
                     style={{
                       position: "absolute",
                       top: 0,
@@ -1061,15 +1166,24 @@ function ShareViewer() {
                       height: 42,
                       transform: `translateY(${virtualRow.start}px)`,
                       display: "grid",
-                      gridTemplateColumns: "1fr 100px 140px",
+                      gridTemplateColumns: selectionMode
+                        ? "32px 1fr 100px 140px"
+                        : "1fr 100px 140px",
                       alignItems: "center",
                       padding: "var(--space-2) var(--space-3)",
                       borderRadius: "var(--radius-md)",
                       cursor: activeFileDownload ? "progress" : "pointer",
+                      background: isSelected
+                        ? "var(--color-accent-muted)"
+                        : "transparent",
                       transition:
                         "background var(--duration-fast) var(--ease-out)",
                     }}
                     onClick={() => {
+                      if (selectionMode) {
+                        toggleSelection(entryPath);
+                        return;
+                      }
                       if (activeFileDownload) return;
                       if (entry.is_dir) {
                         navigate({
@@ -1087,9 +1201,27 @@ function ShareViewer() {
                         "var(--color-bg-muted)";
                     }}
                     onMouseOut={(e) => {
-                      e.currentTarget.style.background = "transparent";
+                      e.currentTarget.style.background = isSelected
+                        ? "var(--color-accent-muted)"
+                        : "transparent";
                     }}
                   >
+                    {selectionMode && (
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${entry.name}`}
+                        checked={isSelected}
+                        onClick={(event) => event.stopPropagation()}
+                        onChange={() => toggleSelection(entryPath)}
+                        style={{
+                          width: 16,
+                          height: 16,
+                          margin: 0,
+                          accentColor: "var(--color-accent)",
+                          cursor: "pointer",
+                        }}
+                      />
+                    )}
                     <div
                       style={{
                         display: "flex",
@@ -2222,6 +2354,20 @@ const secondaryButtonStyle: React.CSSProperties = {
   cursor: "pointer",
   fontWeight: 600,
   fontSize: "var(--text-sm)",
+};
+
+const shareHeaderButtonStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  padding: "var(--space-2) var(--space-3)",
+  border: "1px solid var(--color-border)",
+  borderRadius: "var(--radius-md)",
+  background: "var(--color-bg)",
+  color: "var(--color-fg)",
+  cursor: "pointer",
+  fontWeight: 500,
+  fontSize: "var(--text-sm)",
+  whiteSpace: "nowrap",
 };
 
 const galleryNavButtonStyle: React.CSSProperties = {
